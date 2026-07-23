@@ -1,0 +1,6 @@
+Version=OpenGL ES 3.0.0 (ANGLE 2.1.25606 git hash: cb8b4e1307a9)
+GL.GetApi ok
+After upload: primary.Vao=2 batches=14 indexCount=86745
+DrawModel: Vao=2 batches=14 indexCount=86745
+  mvp[0,0]=1.515 mvp[0,3]=0.000 mvp[3,3]=1.747
+  target=<-0.0001732707, 0.7755444, -0.011759229> dist=1.720 yaw=0.000 pitch=0.050

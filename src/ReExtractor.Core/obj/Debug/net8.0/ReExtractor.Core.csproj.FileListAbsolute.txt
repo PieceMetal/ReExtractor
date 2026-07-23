@@ -1,0 +1,15 @@
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.csproj.AssemblyReference.cache
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.AssemblyInfoInputs.cache
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.AssemblyInfo.cs
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.csproj.CoreCompileInputs.cache
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\bin\Debug\net8.0\ReExtractor.Core.deps.json
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\bin\Debug\net8.0\ReExtractor.Core.dll
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\bin\Debug\net8.0\ReExtractor.Core.pdb
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\bin\Debug\net8.0\REE-Lib.dll
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\bin\Debug\net8.0\REE-Lib.pdb
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtrac.BBAD1E17.Up2Date
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.dll
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\refint\ReExtractor.Core.dll
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ReExtractor.Core.pdb
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\src\ReExtractor.Core\obj\Debug\net8.0\ref\ReExtractor.Core.dll

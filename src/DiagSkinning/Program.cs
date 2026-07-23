@@ -1,0 +1,4 @@
+using ReExtractor.Core;using ReeLib;using ReeLib.Mesh;
+string gameDir=@"E:\Steam\steamapps\common\OnimushaWotS_Demo";string listFile=@"D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list";
+var pak=new PakService();pak.AddPaksFromGameDir(gameDir);pak.LoadListFile(listFile);var path=pak.EnumerateFiles().First(e=>e.Path.Contains("ch001_00/00")&&e.Path.Contains(".mesh.")).Path;using var s=pak.ReadFile(path);var mf=new MeshFile(new FileHandler(s,path));mf.Read();var lod=mf.MeshData!.LODs[0];
+int gi=0;foreach(var g in lod.MeshGroups){Console.WriteLine($"GROUP {gi} id={g.groupId} vertexCount={g.vertexCount}");int si=0;foreach(var sub in g.Submeshes){Console.WriteLine($"  sub{si} mat={sub.materialIndex} name={mf.MaterialNames[sub.materialIndex]} v={sub.vertCount} f={sub.indicesCount/3} voff={sub.vertsIndexOffset}");si++;}gi++;}

@@ -1,0 +1,4 @@
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\publish\ReExtractor.Gui.pdb
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\publish\ReExtractor.Core.pdb
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\publish\REE-Lib.pdb
+C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\publish\ReExtractor.Gui.exe

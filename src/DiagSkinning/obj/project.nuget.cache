@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "dgSpecHash": "CI+Wvoskra8=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\zzjhuang\\WorkBuddy\\RE引擎解包工具\\src\\DiagSkinning\\DiagSkinning.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\bcnencoder.net\\2.3.0\\bcnencoder.net.2.3.0.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\communitytoolkit.highperformance\\8.4.0\\communitytoolkit.highperformance.8.4.0.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\sharpgltf.core\\1.0.6\\sharpgltf.core.1.0.6.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\sharpgltf.runtime\\1.0.6\\sharpgltf.runtime.1.0.6.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\sharpgltf.toolkit\\1.0.6\\sharpgltf.toolkit.1.0.6.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\sixlabors.imagesharp\\2.1.11\\sixlabors.imagesharp.2.1.11.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\standart.hash.xxhash\\4.0.5\\standart.hash.xxhash.4.0.5.nupkg.sha512",
+    "C:\\Users\\zzjhuang\\.nuget\\packages\\zstdsharp.port\\0.8.5\\zstdsharp.port.0.8.5.nupkg.sha512"
+  ],
+  "logs": []
+}

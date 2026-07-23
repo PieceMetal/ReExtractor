@@ -1,0 +1,149 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReExtractor.Gui"
+        x:Class="ReExtractor.Gui.MainWindow"
+        Title="ReExtractor — RE Engine Asset Extractor"
+        Width="1440" Height="860" WindowState="Maximized"
+        Background="#1e1e1e">
+
+  <DockPanel Margin="8">
+    <!-- Top config bar -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto,*,Auto" RowDefinitions="Auto,Auto" Margin="0,0,0,8">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="游戏目录" VerticalAlignment="Center" Margin="0,0,6,4"/>
+      <TextBox Grid.Row="0" Grid.Column="1" x:Name="GameDirBox" Margin="0,0,12,4"
+               Text="E:\Steam\steamapps\common\OnimushaWotS_Demo"/>
+      <TextBlock Grid.Row="0" Grid.Column="2" Text="List 文件" VerticalAlignment="Center" Margin="0,0,6,4"/>
+      <TextBox Grid.Row="0" Grid.Column="3" x:Name="ListFileBox" Margin="0,0,8,4"
+               Text="D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list"/>
+      <Button Grid.Row="0" Grid.Column="4" x:Name="LoadButton" Content="加载 PAK" Click="OnLoadClicked" Padding="16,6"/>
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Blender" VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <TextBox Grid.Row="1" Grid.Column="1" x:Name="BlenderBox" Margin="0,0,12,0"
+               Text="E:\Steam\steamapps\common\Blender\blender.exe"/>
+      <TextBlock Grid.Row="1" Grid.Column="2" Text="输出目录" VerticalAlignment="Center" Margin="0,0,6,0"/>
+      <TextBox Grid.Row="1" Grid.Column="3" x:Name="OutDirBox" Margin="0,0,8,0" Text="output"/>
+      <TextBlock Grid.Row="1" Grid.Column="4" x:Name="StatusText" Text="未加载" VerticalAlignment="Center" Foreground="#9cdcfe"/>
+    </Grid>
+
+    <!-- Bottom status bar -->
+    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,*" Margin="0,8,0,0">
+      <TextBlock Grid.Column="0" x:Name="ActionStatus" Text="" VerticalAlignment="Center" Foreground="#ce9178"/>
+    </Grid>
+
+    <!-- Main: left tree | splitter | center preview | splitter | right panel -->
+    <Grid ColumnDefinitions="280,5,*,5,280">
+
+      <!-- Left: search + folder tree -->
+      <DockPanel Grid.Column="0" Margin="0,0,6,0">
+        <TextBlock DockPanel.Dock="Top" Text="FileTree" Foreground="#808080" Margin="0,0,0,4"/>
+        <TextBox DockPanel.Dock="Top" x:Name="SearchBox" Watermark="搜索路径（如 ch001_00 / em503 / .tex）"
+                 TextChanged="OnSearchChanged" Margin="0,0,0,6"/>
+        <Panel>
+          <TreeView x:Name="FileTree" SelectionChanged="OnTreeSelectionChanged" PointerPressed="OnListPointerPressed">
+            <TreeView.DataTemplates>
+              <TreeDataTemplate DataType="local:FileTreeNode" ItemsSource="{Binding Children}">
+                <TextBlock Text="{Binding Display}">
+                  <TextBlock.ContextFlyout>
+                    <MenuFlyout>
+                      <MenuItem Header="Additional model" Click="OnCtxAddModel"/>
+                      <MenuItem Header="Additional Animations" Click="OnCtxAddAnim"/>
+                      <MenuItem Header="Export" Click="OnCtxExport"/>
+                      <MenuItem Header="Show in Explorer" Click="OnCtxShowExplorer"/>
+                    </MenuFlyout>
+                  </TextBlock.ContextFlyout>
+                </TextBlock>
+              </TreeDataTemplate>
+            </TreeView.DataTemplates>
+          </TreeView>
+          <ListBox x:Name="SearchResults" IsVisible="False" SelectionChanged="OnSearchSelectionChanged" PointerPressed="OnListPointerPressed">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Path}">
+                  <TextBlock.ContextFlyout>
+                    <MenuFlyout>
+                      <MenuItem Header="Additional model" Click="OnCtxAddModel"/>
+                      <MenuItem Header="Additional Animations" Click="OnCtxAddAnim"/>
+                      <MenuItem Header="Export" Click="OnCtxExport"/>
+                      <MenuItem Header="Show in Explorer" Click="OnCtxShowExplorer"/>
+                    </MenuFlyout>
+                  </TextBlock.ContextFlyout>
+                </TextBlock>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Panel>
+      </DockPanel>
+
+      <GridSplitter Grid.Column="1" Width="5" Background="#3f3f46" HorizontalAlignment="Stretch"/>
+
+      <!-- Center: preview with top toolbar + bottom playback bar -->
+      <DockPanel Grid.Column="2" Margin="6,0,6,0">
+        <TextBlock DockPanel.Dock="Top" Text="Preview" Foreground="#808080" Margin="0,0,0,4"/>
+        <!-- top toolbar -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" Margin="0,0,0,4">
+          <CheckBox Grid.Column="0" x:Name="SkeletonCheck" Content="骨架" IsChecked="True" VerticalAlignment="Center"
+                    Margin="0,0,12,0" IsCheckedChanged="OnSkeletonToggled"/>
+          <TextBlock Grid.Column="1" Text="Motion" VerticalAlignment="Center" Margin="0,0,4,0"/>
+          <ComboBox Grid.Column="2" x:Name="MotionCombo" MinWidth="220" SelectionChanged="OnMotionChanged"
+                    IsVisible="False"/>
+          <TextBlock Grid.Column="3" Text="TEX_DEBUG" VerticalAlignment="Center" Margin="0,0,4,0"
+                     ToolTip.Tip="3D 渲染调试模式：0正常 / 1纯色(完全跳过贴图采样) / 2贴图直出(无光照) / 3 UV可视化"/>
+          <ComboBox Grid.Column="4" x:Name="TexDebugCombo" Width="150" SelectedIndex="0" VerticalAlignment="Center"
+                    SelectionChanged="OnTexDebugModeChanged">
+            <ComboBoxItem>0 正常</ComboBoxItem>
+            <ComboBoxItem>1 纯色(跳采样)</ComboBoxItem>
+            <ComboBoxItem>2 贴图直出(无光照)</ComboBoxItem>
+            <ComboBoxItem>3 UV可视化</ComboBoxItem>
+          </ComboBox>
+          <StackPanel Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <TextBlock x:Name="FpsText" Text="" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#9cdcfe"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- bottom playback bar -->
+        <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+          <Button Grid.Column="0" x:Name="PlaybackButton" Content="▶" Click="OnPlaybackClicked"
+                  Padding="14,4" Margin="0,0,8,0"/>
+          <Slider Grid.Column="1" x:Name="TimelineSlider" VerticalAlignment="Center"
+                  Minimum="0" Maximum="1" Value="0" IsVisible="False"
+                  ValueChanged="OnTimelineScrubbed"/>
+          <TextBlock Grid.Column="2" x:Name="TimelineText" Text="" VerticalAlignment="Center"
+                     Margin="8,0,0,0" Foreground="#9cdcfe" MinWidth="110"/>
+        </Grid>
+
+        <!-- viewport / image -->
+        <Border Background="#252526" CornerRadius="4">
+          <Grid>
+            <Image x:Name="PreviewImage" Stretch="Uniform"/>
+            <local:GlViewport x:Name="Viewport" IsVisible="False" Focusable="True"/>
+          </Grid>
+        </Border>
+      </DockPanel>
+
+      <GridSplitter Grid.Column="3" Width="5" Background="#3f3f46" HorizontalAlignment="Stretch"/>
+
+      <!-- Right: operation panels -->
+      <ScrollViewer Grid.Column="4" Margin="6,0,0,0">
+        <StackPanel>
+          <TextBlock Text="打开的文件" Foreground="#808080" Margin="0,0,0,4"/>
+          <Border Background="#252526" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+            <SelectableTextBlock x:Name="OpenFileText" Text="（未选择）" TextWrapping="Wrap" Foreground="#d4d4d4"/>
+          </Border>
+
+          <TextBlock Text="导出" Foreground="#808080" Margin="0,0,0,4"/>
+          <Border Background="#252526" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+            <StackPanel>
+              <Button x:Name="ExportButton" Content="导出选中" Click="OnExportClicked" Margin="0,0,0,6"/>
+              <Button x:Name="ExportAnimButton" Content="导出动画(GLB)" Click="OnExportAnimClicked"/>
+            </StackPanel>
+          </Border>
+
+          <TextBlock Text="详情" Foreground="#808080" Margin="0,0,0,4"/>
+          <Border Background="#252526" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+            <SelectableTextBlock x:Name="InfoText" Text="选择左侧文件查看详情" TextWrapping="Wrap" Foreground="#d4d4d4"/>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </DockPanel>
+</Window>
