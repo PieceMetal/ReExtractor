@@ -1,0 +1,55 @@
+# ============================================================
+# ReExtractor - .gitignore
+# 仅跟踪源码（src/ tools/ README.md ReExtractor.sln），
+# 排除 .NET/Avalonia 构建产物、NuGet 缓存、调试垃圾与提取资产。
+# ============================================================
+
+# ---- .NET / MSBuild 构建产物 ----
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+
+# Rider / VS 用户配置
+*.user
+*.suo
+*.userprefs
+.vs/
+
+# NuGet 包还原缓存（PackageReference 模式下的中间产物）
+project.assets.json
+*.nuget.props
+*.nuget.targets
+packages/
+nuget-packages/
+
+# 发布输出
+*.publish/
+
+# ---- 本机调试 / 验证产物（务必排除）----
+*.log
+gl_log.txt
+perf_log.txt
+vp_layout.log
+gui_launch.log
+gl_verify.png
+perf_verify.png
+*_verify.png
+
+# ---- 提取资产 / 解包输出（体积大、非源码，整目录排除）----
+output/
+
+# ---- 操作系统 / 编辑器垃圾 ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*~
+
+# ---- 本地工具状态（WorkBuddy 项目数据，非软件源码）----
+.workbuddy/
+
+# ---- 备份 / 临时 ----
+*.bak
+*.tmp
+*.swp

@@ -1,0 +1,33 @@
+# ============================================================
+# ReExtractor - .gitattributes
+# 统一换行符与二进制判定，避免跨平台/跨编辑器差异。
+# Windows + .NET/Avalonia 项目约定：源码用 CRLF。
+# ============================================================
+
+# 默认：自动判定文本，检出为 CRLF
+* text=auto eol=crlf
+
+# 源码 / 工程文件显式按文本 + CRLF
+*.cs      text eol=crlf
+*.csproj  text eol=crlf
+*.sln     text eol=crlf
+*.axaml   text eol=crlf
+*.xaml    text eol=crlf
+*.md      text eol=crlf
+*.json    text eol=crlf
+*.targets text eol=crlf
+*.props   text eol=crlf
+
+# 脚本按 LF（跨平台友好）
+*.py      text eol=lf
+*.sh      text eol=lf
+
+# 二进制（永不合并/换行转换）
+*.png  binary
+*.jpg  binary
+*.dll  binary
+*.exe  binary
+*.pdb  binary
+*.glb  binary
+*.so   binary
+*.dylib binary
