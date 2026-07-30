@@ -1,3 +1,5 @@
+﻿using System.Diagnostics;
+using System.IO;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -36,6 +38,15 @@ public partial class SettingsWindow : Window
         if (folders.Count > 0) OutputDirectoryBox.Text = folders[0].Path.LocalPath;
     }
 
+
+    private void OnOpenOutputClicked(object? sender, RoutedEventArgs e)
+    {
+        var outDir = string.IsNullOrWhiteSpace(OutputDirectoryBox.Text)
+            ? AppPaths.OutputDirectory
+            : OutputDirectoryBox.Text.Trim();
+        Directory.CreateDirectory(outDir);
+        Process.Start("explorer.exe", $"\"{outDir}\"");
+    }
     private void OnSaveClicked(object? sender, RoutedEventArgs e) => Close(new AppSettings
     {
         BlenderPath = BlenderPathBox.Text?.Trim() ?? "",

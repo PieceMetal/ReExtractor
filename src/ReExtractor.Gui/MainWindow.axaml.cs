@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using Avalonia;
@@ -85,8 +86,8 @@ public partial class MainWindow : Window
     private string? _contextPath;
     private string? _lastMeshPath;
     private readonly List<string> _previewMeshPaths = new();
-    private readonly string _tempDir = Path.Combine(AppContext.BaseDirectory, "temp");
-    private readonly string _logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+    private readonly string _tempDir = AppPaths.TempDirectory;
+    private readonly string _logDirectory = AppPaths.LogsDirectory;
     private int _progressOperation;
     private AppSettings _settings = AppSettingsService.Load();
     private readonly List<string> _loadedPakPaths = new();
@@ -118,7 +119,8 @@ public partial class MainWindow : Window
         {
             var b = Viewport.IsVisible ? $"图形加速 {Viewport.Bounds.Width:F0}×{Viewport.Bounds.Height:F0}" : "";
             var f = Viewport.IsPlaying ? $"帧率 {Viewport.CurrentFps:F0}" : "";
-            FpsText.Text = string.Join(' ', new[] { b, f }.Where(x => x != ""));
+            var d = Viewport.IsVisible ? Viewport.RenderDiagnostics : "";
+            FpsText.Text = string.Join(" | ", new[] { b, f, d }.Where(x => x != ""));
             if (Viewport.IsVisible) UpdateViewportChrome();
         };
         _fpsTimer.Start();
@@ -126,13 +128,14 @@ public partial class MainWindow : Window
         _actionStatusLogSubscription = ActionStatus.GetObservable(TextBlock.TextProperty)
             .Subscribe(new TextObserver(AppendLog));
         AppendLog("工具已启动，请选择路径列表并加载 PAK");
+        Opened += async (_, _) => await ShowEnvironmentWindowAsync();
 
     }
 
     private Avalonia.Threading.DispatcherTimer? _fpsTimer;
 
     private string CurrentOutputDirectory => string.IsNullOrWhiteSpace(_settings.OutputDirectory)
-        ? Path.Combine(AppContext.BaseDirectory, "output")
+        ? AppPaths.OutputDirectory
         : _settings.OutputDirectory;
     private string CurrentBlenderPath => _settings.BlenderPath?.Trim() ?? "";
 
@@ -246,10 +249,10 @@ public partial class MainWindow : Window
         }
         _settings.LastGameDirectory = gameDir;
         AppSettingsService.Save(_settings);
-        var paks = Directory.GetFiles(gameDir, "*.pak", SearchOption.TopDirectoryOnly);
+        var paks = FindPakFiles(gameDir).ToArray();
         if (paks.Length == 0)
         {
-            ActionStatus.Text = "该文件夹中没有找到 PAK 文件";
+            ActionStatus.Text = "该游戏文件夹中没有找到 PAK 文件";
             return;
         }
         await LoadPakFilesAsync(paks);
@@ -263,7 +266,9 @@ public partial class MainWindow : Window
             RefreshManagedLists(selected);
             _settings.LastListPath = selected;
             AppSettingsService.Save(_settings);
+            var selectedList = ManagedListCombo.SelectedItem as ManagedFileList;
             ActionStatus.Text = $"已选择资源列表：{Path.GetFileNameWithoutExtension(selected)}";
+            await TryAutoSelectGameDirectoryForListAsync(selectedList);
         }
         else
         {
@@ -511,7 +516,7 @@ public partial class MainWindow : Window
             var line = rawLine.Trim();
             if (!line.Contains("\"path\"", StringComparison.OrdinalIgnoreCase)) continue;
             var parts = line.Split('"', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 4) continue;
+            if (parts.Length < 2) continue;
             var path = parts[^1].Replace(@"\\", @"\").Replace('/', Path.DirectorySeparatorChar);
             if (Directory.Exists(path)) yield return path;
         }
@@ -523,17 +528,69 @@ public partial class MainWindow : Window
         foreach (var rawLine in File.ReadLines(manifestPath))
         {
             var parts = rawLine.Trim().Split('"', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 4) values[parts[0]] = parts[^1];
+            if (parts.Length >= 2) values[parts[0]] = parts[^1];
         }
         return values;
     }
 
     private static bool IsLikelyGamePakDirectory(string path)
     {
-        return Directory.Exists(path) && Directory.EnumerateFiles(path, "*.pak", SearchOption.TopDirectoryOnly).Any();
+        return Directory.Exists(path) && FindPakFiles(path).Any();
+    }
+
+    private static IEnumerable<string> FindPakFiles(string root)
+    {
+        foreach (var pak in EnumerateFilesShallow(root, "*.pak", 4))
+            yield return pak;
+    }
+
+    private static IEnumerable<string> EnumerateFilesShallow(string root, string pattern, int maxDepth)
+    {
+        if (maxDepth < 0 || !Directory.Exists(root)) yield break;
+
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(root, pattern, SearchOption.TopDirectoryOnly).ToArray(); }
+        catch { yield break; }
+        foreach (var file in files) yield return file;
+
+        IEnumerable<string> children;
+        try { children = Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly).ToArray(); }
+        catch { yield break; }
+        foreach (var child in children)
+        {
+            foreach (var nested in EnumerateFilesShallow(child, pattern, maxDepth - 1))
+                yield return nested;
+        }
     }
 
     private async void OnSettingsClicked(object? sender, RoutedEventArgs e)
+        => await OpenSettingsDialogAsync();
+    private async Task<bool> EnsureBlenderReadyAsync()
+    {
+        if (File.Exists(CurrentBlenderPath)) return true;
+        ActionStatus.Text = "FBX 导出需要先安装 Blender，并在设置里选择 blender.exe";
+        await ShowEnvironmentWindowAsync();
+        return File.Exists(CurrentBlenderPath);
+    }
+
+    private async Task ShowEnvironmentWindowAsync()
+    {
+        var action = await new EnvironmentWindow(_settings).ShowDialog<string?>(this);
+        if (action == "download")
+        {
+            OpenExternalUrl("https://www.blender.org/download/");
+            ActionStatus.Text = "已打开 Blender 下载页面，安装后请在设置里选择 blender.exe";
+            return;
+        }
+        if (action == "settings")
+        {
+            await OpenSettingsDialogAsync();
+            return;
+        }
+
+    }
+
+    private async Task OpenSettingsDialogAsync()
     {
         var updated = await new SettingsWindow(_settings).ShowDialog<AppSettings?>(this);
         if (updated == null) return;
@@ -544,8 +601,16 @@ public partial class MainWindow : Window
         ActionStatus.Text = "设置已保存";
     }
 
+    private static void OpenExternalUrl(string url)
+    {
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
     private async void OnAboutClicked(object? sender, RoutedEventArgs e)
         => await new AboutWindow().ShowDialog(this);
+
+    private async void OnEnvironmentClicked(object? sender, RoutedEventArgs e)
+        => await ShowEnvironmentWindowAsync();
     private async void OnOpenPakClicked(object? sender, RoutedEventArgs e)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -571,9 +636,22 @@ public partial class MainWindow : Window
         if (paths.Length > 0) await LoadPakFilesAsync(paths);
     }
 
+
+    private static IEnumerable<string> ExpandPakSet(IEnumerable<string> pakPaths)
+    {
+        var explicitPaths = pakPaths.Where(File.Exists).ToArray();
+        foreach (var path in explicitPaths) yield return path;
+
+        foreach (var group in explicitPaths.GroupBy(path => Path.GetDirectoryName(path) ?? "", StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(group.Key) || !Directory.Exists(group.Key)) continue;
+            foreach (var sibling in Directory.EnumerateFiles(group.Key, "*.pak", SearchOption.TopDirectoryOnly))
+                yield return sibling;
+        }
+    }
     private async Task LoadPakFilesAsync(IEnumerable<string> pakPaths)
     {
-        var paths = pakPaths.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase)
+        var paths = ExpandPakSet(pakPaths).Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToArray();
         var listFile = SelectedListPath;
         if (paths.Length == 0) { ActionStatus.Text = "没有可加载的 PAK 文件"; return; }
@@ -892,7 +970,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     var viewportMesh = await Task.Run(() =>
                     {
                         using var ms = _pak.ReadFile(path);
-                        return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource);
+                        return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: false);
                     });
                     if (IsStale()) return;
                     ShowViewport();
@@ -900,7 +978,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     SetPreviewMeshPaths(path);
                     ClearMotionState();
                     RefreshVisconGroups();
-                    ActionStatus.Text = $"模型已加载 | {Viewport.StatusInfo} | 贴图 {viewportMesh.Textures.Length} 张 | {viewportMesh.VisconInfo}";
+                    ActionStatus.Text = $"模型已加载（未加载贴图） | {Viewport.StatusInfo} | {viewportMesh.VisconInfo}";
                     break;
                 }
                 case "motlist":
@@ -1001,6 +1079,60 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         UpdateViewportChrome();
     }
 
+
+    private async void OnLoadTexturesClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_pak == null || _previewMeshPaths.Count == 0)
+        {
+            ActionStatus.Text = "请先加载模型，再加载贴图";
+            return;
+        }
+
+        var paths = _previewMeshPaths.ToArray();
+        var operation = ++_previewSeq;
+        var progress = BeginProgress("正在加载贴图…");
+        LoadTexturesButton.IsEnabled = false;
+        try
+        {
+            var meshes = new ViewportMesh[paths.Length];
+            for (var index = 0; index < paths.Length; index++)
+            {
+                var path = paths[index];
+                meshes[index] = await Task.Run(() =>
+                {
+                    using var ms = _pak.ReadFile(path);
+                    return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: true);
+                });
+                UpdateProgress(progress, index + 1, $"正在加载贴图 {index + 1}/{paths.Length}");
+            }
+            if (operation != _previewSeq) return;
+
+            ShowViewport();
+            SetPreviewMeshPaths(paths);
+            var allSame = meshes.Length > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
+            if (allSame)
+            {
+                Viewport.SetMesh(ViewportMesh.Merge(meshes));
+            }
+            else
+            {
+                Viewport.SetMesh(meshes[0]);
+                for (var i = 1; i < meshes.Length; i++)
+                    Viewport.AddMesh(meshes[i], paths[i].Split('/')[^1]);
+            }
+            RefreshVisconGroups();
+            ActionStatus.Text = $"贴图已加载 | {Viewport.StatusInfo}";
+        }
+        catch (Exception ex)
+        {
+            ActionStatus.Text = "加载贴图失败：" + ex.Message;
+        }
+        finally
+        {
+            LoadTexturesButton.IsEnabled = true;
+            EndProgress(progress);
+        }
+    }
     private void OnViewportRenderModeChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_syncingViewportUi || Viewport is null || RenderModeCombo?.SelectedIndex < 0) return;
@@ -1119,13 +1251,21 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         PlaybackOverlay.IsVisible = true;
         TimelineSlider.IsVisible = true;
         PlaybackButton.Content = Viewport.IsPlaying ? "⏸" : "▶";
-        TimelineText.Text = $"0.0 / {duration:F1}s";
+        TimelineText.Text = FormatTimelineText(0, duration, Viewport.AnimationFrameRate, Viewport.AnimationFrameCount);
         _playheadTimer ??= new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _playheadTimer.Tick -= OnPlayheadTick;
         _playheadTimer.Tick += OnPlayheadTick;
         _playheadTimer.Start();
     }
 
+
+    private static string FormatTimelineText(float currentTime, float duration, int fps, int frameCount)
+    {
+        fps = fps > 0 ? fps : 60;
+        var total = frameCount > 0 ? frameCount : Math.Max(0, (int)MathF.Round(duration * fps));
+        var currentFrame = Math.Clamp((int)MathF.Round(currentTime * fps), 0, total);
+        return $"{currentTime:F2} / {duration:F2}s    {currentFrame} / {total} 帧    {fps} FPS";
+    }
     private void OnPlayheadTick(object? sender, EventArgs e)
     {
         if (!Viewport.HasAnimation) { _playheadTimer?.Stop(); return; }
@@ -1135,14 +1275,16 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             TimelineSlider.Value = Viewport.CurrentTime;
             _suppressSlider = false;
         }
-        TimelineText.Text = $"{Viewport.CurrentTime:F1} / {Viewport.Duration:F1}s";
+        TimelineText.Text = FormatTimelineText(Viewport.CurrentTime, Viewport.Duration, Viewport.AnimationFrameRate, Viewport.AnimationFrameCount);
     }
 
     private void OnTimelineScrubbed(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
         if (_suppressSlider) return;
+        if (Viewport.IsPlaying) Viewport.PausePlayback();
         Viewport.ScrubTo((float)e.NewValue);
-        TimelineText.Text = $"{Viewport.CurrentTime:F1} / {Viewport.Duration:F1}s";
+        PlaybackButton.Content = Viewport.IsPlaying ? "⏸" : "▶";
+        TimelineText.Text = FormatTimelineText(Viewport.CurrentTime, Viewport.Duration, Viewport.AnimationFrameRate, Viewport.AnimationFrameCount);
     }
 
     private async void OnMotionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1279,15 +1421,26 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private static string ResolveToolsScript(string scriptName)
     {
-        // try cwd first (dotnet run from repo root), then exe directory (published exe)
-        var candidates = new[]
-        {
-            Path.Combine(Directory.GetCurrentDirectory(), "tools", scriptName),
-            Path.Combine(AppContext.BaseDirectory, "tools", scriptName),
-        };
-        foreach (var c in candidates)
-            if (File.Exists(c)) return c;
-        throw new FileNotFoundException($"找不到脚本 {scriptName}（已尝试: {string.Join(", ", candidates)}）");
+        var repoScript = Path.Combine(Directory.GetCurrentDirectory(), "tools", scriptName);
+        if (File.Exists(repoScript)) return repoScript;
+
+        var toolDir = AppPaths.ToolsDirectory;
+        var targetPath = Path.Combine(toolDir, scriptName);
+        if (File.Exists(targetPath)) return targetPath;
+
+        Directory.CreateDirectory(toolDir);
+        var assembly = Assembly.GetExecutingAssembly();
+        var resourceName = assembly.GetManifestResourceNames().FirstOrDefault(name =>
+            name.Contains("EmbeddedTools", StringComparison.OrdinalIgnoreCase) &&
+            name.EndsWith("." + scriptName, StringComparison.OrdinalIgnoreCase));
+        if (resourceName == null)
+            throw new FileNotFoundException($"找不到内置脚本 {scriptName}");
+
+        using var input = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new FileNotFoundException($"无法读取内置脚本 {scriptName}");
+        using var output = File.Create(targetPath);
+        input.CopyTo(output);
+        return targetPath;
     }
 
     private void ShowImage(string png)
@@ -1315,7 +1468,6 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         { ActionStatus.Text = "当前预览缺少可用于生成骨架的模型"; return; }
 
         var exportCurrent = ExportAnimScopeCombo.SelectedIndex <= 0;
-        var exportFps = ExportAnimFpsCombo.SelectedIndex == 1 ? 30 : 60;
         var selectedMotionComboIndex = MotionCombo.SelectedIndex;
         if (exportCurrent && ((uint)selectedMotionComboIndex >= (uint)_currentMotionIndices.Length))
         { ActionStatus.Text = "请先在动画下拉框中选择要导出的当前动画"; return; }
@@ -1323,13 +1475,14 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
         var motlistPath = _currentMotlistPath;
         var outDir = Path.GetFullPath(CurrentOutputDirectory);
+        if (!await EnsureBlenderReadyAsync()) return;
         var blender = CurrentBlenderPath;
         var scopeText = exportCurrent ? "当前动画" : "全部动画";
+        var exportFps = Viewport.AnimationFrameRate;
         var progress = BeginProgress($"正在导出{scopeText}…");
-        ActionStatus.Text = $"正在导出{scopeText}（{exportFps} FPS）…";
+        ActionStatus.Text = $"正在导出{scopeText}…";
         ExportAnimButton.IsEnabled = false;
         ExportAnimScopeCombo.IsEnabled = false;
-        ExportAnimFpsCombo.IsEnabled = false;
         try
         {
             var result = await Task.Run(() =>
@@ -1370,7 +1523,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 }
                 finally { TryDeleteDirectory(workDir); }
             });
-            ActionStatus.Text = $"动画导出完成：{result.Item1} 个 FBX，{exportFps} FPS，不含模型 | {result.finalDir}";
+            ActionStatus.Text = $"动画导出完成：{result.Item1} 个 FBX | {result.finalDir}";
         }
         catch (Exception ex)
         {
@@ -1380,7 +1533,6 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         {
             ExportAnimButton.IsEnabled = true;
             ExportAnimScopeCombo.IsEnabled = true;
-            ExportAnimFpsCombo.IsEnabled = true;
             EndProgress(progress);
         }
     }
@@ -1393,6 +1545,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (exportModels.Count == 0)
             throw new InvalidOperationException("预览场景没有可导出的模型");
         var outDir = Path.GetFullPath(CurrentOutputDirectory);
+        if (!await EnsureBlenderReadyAsync()) return;
         var blender = CurrentBlenderPath;
         var outputPath = Path.Combine(outDir, NativeStem(paths[0], ".mesh") +
             (sourceCount > 1 ? $"_合并{sourceCount}个模型" : "") + ".fbx");
@@ -1576,7 +1729,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var vm = await Task.Run(() =>
             {
                 using var ms = _pak.ReadFile(path);
-                return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource);
+                return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: false);
             });
             if (sceneOperation != _previewSeq) return;
             ShowViewport();
@@ -1593,7 +1746,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 SetPreviewMeshPaths(path);
                 ClearMotionState();
                 RefreshVisconGroups();
-                ActionStatus.Text = $"模型已加载 | {Viewport.StatusInfo}";
+                ActionStatus.Text = $"模型已加载（未加载贴图） | {Viewport.StatusInfo}";
             }
         }
         catch (Exception ex)
@@ -1668,7 +1821,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 meshes[index] = await Task.Run(() =>
                 {
                     using var ms = _pak.ReadFile(paths[index]);
-                    return ViewportDataLoader.LoadMesh(ms, paths[index], 1, OpenResource);
+                    return ViewportDataLoader.LoadMesh(ms, paths[index], 1, OpenResource, loadTextures: false);
                 });
                 UpdateProgress(progress, index + 1,
                     $"正在加载模型 {index + 1}/{paths.Length}");
@@ -1687,7 +1840,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 var merged = ViewportMesh.Merge(meshes);
                 Viewport.SetMesh(merged);
                 RefreshVisconGroups();
-                ActionStatus.Text = $"已几何合并 {meshes.Length} 个模型（同骨骼）→ 预览 1 个整体，导出包含全部 {paths.Length} 个源模型";
+                ActionStatus.Text = $"已几何合并 {meshes.Length} 个模型（未加载贴图，同骨骼）→ 预览 1 个整体，导出包含全部 {paths.Length} 个源模型";
             }
             else
             {
@@ -1695,7 +1848,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 RefreshVisconGroups();
                 for (var i = 1; i < meshes.Length; i++)
                     Viewport.AddMesh(meshes[i], paths[i].Split('/')[^1]);
-                var verb = meshes.Length > 1 ? $"已加载 {meshes.Length} 个模型（骨骼不同 → 各自独立动画）" : "模型已加载";
+                var verb = meshes.Length > 1 ? $"已加载 {meshes.Length} 个模型（未加载贴图，骨骼不同 → 各自独立动画）" : "模型已加载（未加载贴图）";
                 ActionStatus.Text = $"{verb} | 导出包含全部 {paths.Length} 个源模型 | {Viewport.StatusInfo}";
             }
         }
@@ -1733,20 +1886,29 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (path != null) await ExportPathAsync(path);
     }
 
-    private async void OnCtxShowExplorer(object? sender, RoutedEventArgs e)
+
+    private void OpenOutputFolder()
     {
-        var path = PathFromSender(sender);
-        if (_pak == null || path == null) return;
         var outDir = CurrentOutputDirectory;
+        Directory.CreateDirectory(outDir);
+        Process.Start("explorer.exe", $"\"{outDir}\"");
+        ActionStatus.Text = $"已打开导出文件夹: {outDir}";
+    }
+
+    private void OnOpenOutputFolderClicked(object? sender, RoutedEventArgs e)
+    {
         try
         {
-            var extracted = await Task.Run(() => _pak.ExtractFile(path, outDir));
-            Process.Start("explorer.exe", $"/select,\"{extracted}\"");
-            ActionStatus.Text = $"已提取并定位: {extracted}";
+            OpenOutputFolder();
         }
         catch (Exception ex)
         {
-            ActionStatus.Text = "提取失败: " + ex.Message;
+            ActionStatus.Text = "打开文件夹失败: " + ex.Message;
         }
     }
+    private void OnCtxShowExplorer(object? sender, RoutedEventArgs e)
+    {
+        OnOpenOutputFolderClicked(sender, e);
+    }
 }
+

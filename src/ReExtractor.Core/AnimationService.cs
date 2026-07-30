@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using ReeLib;
 using ReeLib.Common;
 using ReeLib.Mesh;
@@ -140,7 +140,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             if (clip.HasRotation && clip.Rotation!.rotations is { Length: > 0 } rotations)
             {
                 var frames = clip.Rotation.frameIndexes;
-                var fps = clip.Rotation.frameRate > 0 ? clip.Rotation.frameRate : 30u;
+                var fps = clip.Rotation.frameRate > 0 ? clip.Rotation.frameRate : 60u;
                 var keys = new Dictionary<float, Quaternion>(rotations.Length);
                 for (var i = 0; i < rotations.Length; i++)
                 {
@@ -155,7 +155,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } translations)
             {
                 var frames = clip.Translation.frameIndexes;
-                var fps = clip.Translation.frameRate > 0 ? clip.Translation.frameRate : 30u;
+                var fps = clip.Translation.frameRate > 0 ? clip.Translation.frameRate : 60u;
                 var keys = new Dictionary<float, Vector3>(translations.Length);
                 for (var i = 0; i < translations.Length; i++)
                 {
@@ -190,6 +190,8 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         var tracks = new Dictionary<int, BoneTrack>();
         var namedTracks = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);
         var duration = 0f;
+        var sourceFrameRate = 60;
+        var sourceFrameCount = 0;
         foreach (var clip in mot.BoneClips)
         {
             (int Index, string Name) target;
@@ -206,24 +208,30 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             var track = new BoneTrack();
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } translations)
             {
-                var fps = clip.Translation.frameRate > 0 ? clip.Translation.frameRate : 30u;
+                var fps = TrackFrameRate(clip.Translation);
                 var frames = clip.Translation.frameIndexes;
+                var maxFrame = TrackMaxFrame(clip.Translation, translations.Length);
                 track.TransTimes = BuildTimes(frames, translations.Length, fps);
                 track.Translations = translations;
-                duration = Math.Max(duration, track.TransTimes[^1]);
+                sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
+                sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
+                duration = Math.Max(duration, maxFrame / fps);
             }
 
             if (clip.HasRotation && clip.Rotation!.rotations is { Length: > 0 } rotations)
             {
-                var fps = clip.Rotation.frameRate > 0 ? clip.Rotation.frameRate : 30u;
+                var fps = TrackFrameRate(clip.Rotation);
                 var frames = clip.Rotation.frameIndexes;
+                var maxFrame = TrackMaxFrame(clip.Rotation, rotations.Length);
                 track.RotTimes = BuildTimes(frames, rotations.Length, fps);
                 track.Rotations = rotations.Select(q => q.W < 0
                         ? new Quaternion(-q.X, -q.Y, -q.Z, -q.W)
                         : q)
                     .Select(Quaternion.Normalize)
                     .ToArray();
-                duration = Math.Max(duration, track.RotTimes[^1]);
+                sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
+                sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
+                duration = Math.Max(duration, maxFrame / fps);
             }
 
             tracks[target.Index] = track;
@@ -234,9 +242,18 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         {
             Name = $"mot_{motionNumber}",
             Duration = duration,
+            FrameRate = sourceFrameRate, FrameCount = sourceFrameCount,
             Tracks = tracks,
             NamedTracks = namedTracks,
         };
+    }
+
+    private static uint TrackFrameRate(Track track) => track.frameRate > 0 ? track.frameRate : 60u;
+
+    private static float TrackMaxFrame(Track track, int count)
+    {
+        if (track.frameIndexes is { Length: > 0 } frames) return frames[^1];
+        return Math.Max(0, count - 1);
     }
 
     private static float[] BuildTimes(int[]? frames, int count, uint fps)
