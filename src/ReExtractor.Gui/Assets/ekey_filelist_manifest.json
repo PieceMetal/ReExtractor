@@ -1,0 +1,272 @@
+{
+    "source":  "https://github.com/Ekey/REE.PAK.Tool",
+    "commit":  "6cc78c6082856bd4f08a602f30881aed9cf0e262",
+    "files":  [
+                  {
+                      "file_name":  "DD2_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  21868257,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/DD2_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "c1872d4ec7f93a45d12f7c5397b7b0398d9162f0"
+                  },
+                  {
+                      "file_name":  "DMC5_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  5681076,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/DMC5_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "2746fb321157b0de499f2d4adfa5190b0c83e669"
+                  },
+                  {
+                      "file_name":  "DRDR_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  5030510,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/DRDR_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "5dd5de578e19df41fc814a387c5c0ba6373dba33"
+                  },
+                  {
+                      "file_name":  "EXP_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  7971152,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/EXP_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "c899d8b07c0cd73554a1239a24343bef3681192e"
+                  },
+                  {
+                      "file_name":  "KGPG_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  2294607,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/KGPG_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "543d3006333fbdf3e9602517bff6beb38c8a8220"
+                  },
+                  {
+                      "file_name":  "MHR_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  13346375,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/MHR_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "d75cda4200368e65a00a2d2df9016e6f4ce0331e"
+                  },
+                  {
+                      "file_name":  "MHWs_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  25232404,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/MHWs_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "ca37644cc2f2c70b5cceabf267b51b44c299c4ec"
+                  },
+                  {
+                      "file_name":  "O2_SD_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  1584570,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/O2_SD_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "44fbf0abcc31642a3504859e7963cef2782d869d"
+                  },
+                  {
+                      "file_name":  "P_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  7825913,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/P_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "98a80fb0f72a70ddb877f2cc040127dfe3212254"
+                  },
+                  {
+                      "file_name":  "RE2_RT_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  3851040,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE2_RT_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "f5356accd8ebe79bf170a78cbafca3c8c04be06b"
+                  },
+                  {
+                      "file_name":  "RE2_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  3985860,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE2_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "8c846e3a0d8970606f9039d8494d987da961e692"
+                  },
+                  {
+                      "file_name":  "RE3_RT_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  3601115,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE3_RT_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "35d048dbe7744e953a21bf0ea35ae7ebdc172dc7"
+                  },
+                  {
+                      "file_name":  "RE3_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  3704410,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE3_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "62b71dac10cd747e58bf10815ff79afa87fe8dc1"
+                  },
+                  {
+                      "file_name":  "RE4_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  15122497,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE4_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "0088349049b05d557fb305ad27f74aa77a3f359c"
+                  },
+                  {
+                      "file_name":  "RE7_RT_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  4166772,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE7_RT_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "b38f3b095689f10340d80538675c5bdea9343b79"
+                  },
+                  {
+                      "file_name":  "RE7_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  4342966,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE7_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "d024d7f16132fabb195bb06e945600e26ddb59e4"
+                  },
+                  {
+                      "file_name":  "RE8_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  9862198,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE8_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "4a9cfda760a9541673d9f3a06c278539d37aef9a"
+                  },
+                  {
+                      "file_name":  "RE9_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  14865075,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/RE9_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "5d48bd15d5aea71243e91e5e35619d655ef0d01e"
+                  },
+                  {
+                      "file_name":  "SF6_STM_Release.list",
+                      "tags":  [
+                                   "Ekey",
+                                   "REE.PAK.Tool"
+                               ],
+                      "update_time":  "2026-04-22T14:48:41+03:00",
+                      "description":  "",
+                      "size":  27088583,
+                      "sha256":  "",
+                      "direct_url":  "https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/6cc78c6082856bd4f08a602f30881aed9cf0e262/Projects/SF6_STM_Release.list",
+                      "source_name":  "Ekey/REE.PAK.Tool",
+                      "git_blob_sha":  "3ab0134304f4a6e5081bd6d19741c189be2a7735"
+                  }
+              ]
+}

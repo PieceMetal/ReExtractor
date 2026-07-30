@@ -1,0 +1,43 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ReExtractor.Gui.AboutWindow"
+        Icon="/Assets/AppIcon.ico"
+        Title="关于 ReExtractor"
+        Width="560" Height="470" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#16191f">
+  <Grid RowDefinitions="*,Auto" Margin="24">
+    <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+      <StackPanel Spacing="12">
+        <StackPanel Orientation="Horizontal" Spacing="14">
+          <Image Source="/Assets/AppIcon.png" Width="64" Height="64"/>
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="ReExtractor" FontSize="25" FontWeight="Bold" Foreground="#7fc3ff"/>
+            <TextBlock x:Name="VersionText" Foreground="#aab2c0"/>
+          </StackPanel>
+        </StackPanel>
+
+        <Separator/>
+        <TextBlock Text="RE 引擎资源工作台" FontSize="16" FontWeight="SemiBold"/>
+        <TextBlock Text="专注于从 RE Engine PAK 中提取模型、动画和贴图，提供资源预览、模型合并与 UE 可用的 FBX 导出。本工具不提供 Mod 编辑功能。"
+                   TextWrapping="Wrap" Foreground="#d4d4d4"/>
+
+        <Border Background="#20252d" BorderBrush="#303947" BorderThickness="1" CornerRadius="6" Padding="12">
+          <StackPanel Spacing="5">
+            <TextBlock Text="当前支持" FontWeight="SemiBold" Foreground="#9cdcfe"/>
+            <TextBlock Text="• 已验证：《鬼武者：剑之道》DEMO 解包、预览与导出" TextWrapping="Wrap"/>
+            <TextBlock Text="• 通用：RE Engine PAK 扫描、路径还原和资源提取" TextWrapping="Wrap"/>
+            <TextBlock Text="• 实验性：《街头霸王 6》等其他 RE Engine 游戏的模型、材质与动画预览" TextWrapping="Wrap"/>
+          </StackPanel>
+        </Border>
+
+        <TextBlock Text="技术：.NET 10 · Avalonia · RE-Engine-Lib · Blender FBX" Foreground="#aab2c0"/>
+        <TextBlock Text="解析核心：RE-Engine-Lib（MIT License）" FontWeight="SemiBold"/>
+        <SelectableTextBlock Text="https://github.com/kagenocookie/RE-Engine-Lib"
+                             TextWrapping="Wrap" Foreground="#9cdcfe"/>
+      </StackPanel>
+    </ScrollViewer>
+    <Button Grid.Row="1" Content="关闭" Click="OnCloseClicked" HorizontalAlignment="Right"
+            MinWidth="92" Margin="0,18,0,0"/>
+  </Grid>
+</Window>

@@ -53,3 +53,20 @@ Desktop.ini
 *.bak
 *.tmp
 *.swp
+
+# ---- 发布打包目录 ----
+artifacts/
+dist/
+
+# ---- 运行状态与二进制验证产物 ----
+*.fbx
+.gui_pid.txt
+__pycache__/
+tools/_synthetic_export/
+tools/_verify_in/
+tools/_verify_join_in/
+tools/_verify_out/
+tools/gui_gl_screenshot.png
+tools/*_run*.txt
+tools/*_probe.txt
+tools/verify_out_probe.txt

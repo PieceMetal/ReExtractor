@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
+using Avalonia.Input;
 using ReExtractor.Core;
 using Silk.NET.OpenGL;
 
@@ -16,37 +18,48 @@ namespace ReExtractor.Gui;
 /// </summary>
 public sealed class GlViewport : OpenGlControlBase
 {
+    public sealed record ExportModel(ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups);
+    public enum ViewportRenderMode { Material, Textured, Solid, Wireframe, TexturedEdges }
+    public enum ViewportProjection { Perspective, Orthographic }
+    public enum ViewPreset { Perspective, Front, Back, Left, Right, Top, Bottom }
+
     private GL? _gl;
 
     private sealed class GlModel
     {
         public required ViewportMesh Mesh;
-        public uint Vao, Vbo, Ebo;
+        public uint Vao, Vbo, Ebo, EdgeEbo, SelectionEbo;
         public int IndexCount;
-        public (int Slot, int Start, int Count)[] Batches = []; // texture slot + index range
-        public uint[] TexHandles = [];                          // parallel to Batches
+        public int EdgeIndexCount;
+        public int SelectionEdgeIndexCount;
+        public (int Slot, bool AlphaCutout, int Start, int Count)[] Batches = []; // material state + index range
         public float[] Interleaved = []; // pos+normal+uv per vertex, rebuilt on pose change
         public Vector3[] Posed = [];
         public Vector3[] PosedNormals = [];
         public Matrix4x4[] BoneGlobals = [];
         public Matrix4x4[] JointMats = [];
+        public Dictionary<int, BoneTrack>? Tracks;
+        public HashSet<int> VisibleGroups = [];
+        public uint[] TextureHandles = []; // indexed by Mesh.Textures slot
         public bool IsPrimary;
     }
 
     private GlModel? _primary;
+    private int? _selectedPrimaryGroup;
     private readonly List<GlModel> _extras = new();
     private AnimationClip? _clip;
 
     private uint _meshProgram, _lineProgram;
-    private int _uMvp, _uLight, _uHasTex, _uTex, _uTexDebug;
+    private int _uMvp, _uLight, _uViewDir, _uHasTex, _uTex, _uRenderMode, _uAlphaCutout;
     private int _lMvp, _lColor;
     private uint _lineVao, _lineVbo;
     private readonly List<float> _lineVerts = new();
-    private int _gridLineCount;
+    private int _gridMinorCount, _gridLineCount;
 
     // camera (same orbit math as the software viewport)
     private float _yaw = 0.7f, _pitch = 0.35f, _dist = 2.0f;
     private Vector3 _target = Vector3.Zero;
+    private Vector3 _boundsMin = new(-1), _boundsMax = new(1);
     private Avalonia.Point _lastPointer;
     private bool _orbiting, _panning;
 
@@ -56,14 +69,28 @@ public sealed class GlViewport : OpenGlControlBase
     private bool _playing;
     private DateTime _lastTick = DateTime.UtcNow;
 
-    private static readonly Vector3 LightDir = Vector3.Normalize(new(0.5f, -1f, 0.8f));
+    private static readonly Vector3 LightDir = Vector3.Normalize(new(-0.45f, -0.75f, -0.55f));
 
-    public bool ShowSkeleton { get; set; } = true;
+    public bool ShowSkeleton { get; set; }
+    public bool ShowGrid { get; set; } = true;
+    public bool ShowAxes { get; set; } = true;
+    public ViewportRenderMode RenderMode { get; set; } = ViewportRenderMode.Material;
+    public ViewportProjection Projection { get; set; } = ViewportProjection.Perspective;
+    public ViewPreset CurrentView { get; private set; } = ViewPreset.Perspective;
+    public string ViewLabel => $"{CurrentViewName} · {(Projection == ViewportProjection.Perspective ? "透视" : "正交")} · {RenderModeName}";
+    private string CurrentViewName => CurrentView switch
+    {
+        ViewPreset.Front => "前视图", ViewPreset.Back => "后视图", ViewPreset.Left => "左视图",
+        ViewPreset.Right => "右视图", ViewPreset.Top => "顶视图", ViewPreset.Bottom => "底视图", _ => "用户视图"
+    };
+    private string RenderModeName => RenderMode switch
+    {
+        ViewportRenderMode.Material => "材质", ViewportRenderMode.Textured => "贴图",
+        ViewportRenderMode.Solid => "实体", ViewportRenderMode.Wireframe => "线框", _ => "材质+边线"
+    };
 
     /// <summary>
-    /// TEX_DEBUG render mode for isolating texture-anomaly causes:
-    /// 0 = normal (texture × light) | 1 = solid color, skip texture sampling |
-    /// 2 = raw texture, no lighting | 3 = UV visualization (u→R, v→G).
+    /// Legacy diagnostic API retained for callers. The professional toolbar uses RenderMode.
     /// </summary>
     public int TexDebugMode { get; set; }
 
@@ -76,6 +103,19 @@ public sealed class GlViewport : OpenGlControlBase
     private DateTime _lastRenderAt = DateTime.UtcNow;
     public string StatusInfo { get; private set; } = "无模型";
     public int ExtraModelCount => _extras.Count;
+    public IReadOnlyList<ViewportGroup> PrimaryGroups => _primary?.Mesh.Groups ?? [];
+    public IReadOnlySet<int> VisiblePrimaryGroups => _primary?.VisibleGroups ?? EmptyGroupSet;
+    public IReadOnlyList<ExportModel> ExportModels
+    {
+        get
+        {
+            if (_primary == null) return [];
+            return new[] { _primary }.Concat(_extras)
+                .Select(model => new ExportModel(model.Mesh, model.VisibleGroups.ToHashSet()))
+                .ToArray();
+        }
+    }
+    private static readonly HashSet<int> EmptyGroupSet = [];
     public event Action? StateChanged;
 
     /// <summary>Bone names of the currently loaded mesh (for remap of .mot tracks).</summary>
@@ -90,30 +130,50 @@ public sealed class GlViewport : OpenGlControlBase
             return names;
         }
     }
+    public string[] AllMeshBoneNames => (_primary == null
+        ? Enumerable.Empty<string>()
+        : _primary.Mesh.Bones.Select(b => b.Name)
+            .Concat(_extras.SelectMany(model => model.Mesh.Bones.Select(b => b.Name))))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
     public GlViewport()
     {
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _timer.Tick += OnTick;
+    }
+
+    // Re-render whenever the control resizes: the first frame can capture a not-yet-settled
+    // Bounds (wrong aspect → tilted/clipped image); a resize-triggered redraw self-corrects it.
+    protected override void OnSizeChanged(Avalonia.Controls.SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        RequestNextFrameRendering();
     }
 
     // ---------- public API (mirrors the software viewport) ----------
 
     public void SetMesh(ViewportMesh mesh)
     {
+        _selectedPrimaryGroup = null;
         _primary = CreateModel(mesh, isPrimary: true);
         _extras.Clear();
         _clip = null;
         StopPlayback();
-        FrameCamera(mesh);
-        StatusInfo = $"顶点 {mesh.VertexCount:N0} | 面 {mesh.FaceCount:N0} | 骨骼 {mesh.Bones.Length} | 贴图 {mesh.Textures.Length}";
+        FrameCamera();
+        UpdateStatusInfo();
         StateChanged?.Invoke();
         RequestNextFrameRendering();
     }
 
     public void AddMesh(ViewportMesh mesh, string name)
     {
-        _extras.Add(CreateModel(mesh, isPrimary: false));
+        var model = CreateModel(mesh, isPrimary: false);
+        model.Tracks = BuildTrackMap(model);
+        _extras.Add(model);
+        RecalculateVisibleBounds();
+        BuildGridLines();
+        FitCamera();
         StateChanged?.Invoke();
         RequestNextFrameRendering();
     }
@@ -122,6 +182,13 @@ public sealed class GlViewport : OpenGlControlBase
     {
         _clip = clip;
         _time = 0;
+        if (_primary != null) _primary.Tracks = BuildTrackMap(_primary);
+        foreach (var extra in _extras) extra.Tracks = BuildTrackMap(extra);
+        if (clip != null)
+        {
+            if (_primary != null) EvaluatePose(_primary, 0);
+            foreach (var extra in _extras) EvaluatePose(extra, 0);
+        }
         if (clip != null && clip.Duration > 0) StartPlayback(); else StopPlayback();
         StateChanged?.Invoke();
     }
@@ -137,10 +204,193 @@ public sealed class GlViewport : OpenGlControlBase
         if (_clip == null) return;
         _time = Math.Clamp(time, 0, _clip.Duration);
         if (_primary != null) EvaluatePose(_primary, _time);
+        foreach (var extra in _extras) EvaluatePose(extra, _time);
         RequestNextFrameRendering();
     }
 
     public void Refresh() => RequestNextFrameRendering();
+
+    public void SetPrimaryGroupVisible(int key, bool visible)
+    {
+        if (_primary == null || !_primary.Mesh.Groups.Any(g => g.Key == key)) return;
+        if (visible) _primary.VisibleGroups.Add(key); else _primary.VisibleGroups.Remove(key);
+        QueueIndexUpdate(_primary);
+        RecalculateVisibleBounds();
+        UpdateStatusInfo();
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+    public void ResetPrimaryGroupVisibility()
+    {
+        if (_primary == null) return;
+        _primary.VisibleGroups = _primary.Mesh.Groups.Where(g => g.DefaultVisible).Select(g => g.Key).ToHashSet();
+        QueueIndexUpdate(_primary);
+        RecalculateVisibleBounds();
+        UpdateStatusInfo();
+        FrameAll();
+    }
+
+    public void SetAllPrimaryGroupsVisible(bool visible)
+    {
+        if (_primary == null) return;
+        _primary.VisibleGroups = visible
+            ? _primary.Mesh.Groups.Select(g => g.Key).ToHashSet()
+            : [];
+        QueueIndexUpdate(_primary);
+        RecalculateVisibleBounds();
+        UpdateStatusInfo();
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+    public void IsolatePrimaryGroup(int key)
+    {
+        if (_primary == null || !_primary.Mesh.Groups.Any(g => g.Key == key)) return;
+        _primary.VisibleGroups = [key];
+        QueueIndexUpdate(_primary);
+        RecalculateVisibleBounds();
+        UpdateStatusInfo();
+        FrameAll();
+    }
+
+    public void FramePrimaryGroup(int key)
+    {
+        if (_primary == null || !_primary.Mesh.Groups.Any(g => g.Key == key)) return;
+        if (!TryGetPrimaryGroupBounds(key, out var min, out var max)) return;
+        _target = (min + max) * 0.5f;
+        FitCamera(min, max);
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+    public void SelectPrimaryGroup(int? key)
+    {
+        if (_primary == null) return;
+        _selectedPrimaryGroup = key.HasValue && _primary.Mesh.Groups.Any(g => g.Key == key.Value)
+            ? key
+            : null;
+        QueueSelectionUpdate(_primary);
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Camera input entry points used by the transparent Avalonia input surface hosted above
+    /// the native OpenGL control.  OpenGlControlBase can be rendered through a native surface
+    /// on Windows, so relying on its own routed pointer events is not reliable.
+    /// </summary>
+    public void BeginCameraDrag(Avalonia.Point position, bool orbit, bool pan)
+    {
+        _lastPointer = position;
+        _orbiting = orbit;
+        _panning = pan;
+    }
+
+    public void UpdateCameraDrag(Avalonia.Point position)
+    {
+        var dx = (float)(position.X - _lastPointer.X);
+        var dy = (float)(position.Y - _lastPointer.Y);
+        _lastPointer = position;
+
+        if (_orbiting)
+        {
+            CurrentView = ViewPreset.Perspective;
+            // Named direction views are orthographic, but as soon as the user starts a
+            // free orbit this becomes the User view again. User view is always perspective;
+            // never carry the named view's orthographic projection into an orbit.
+            Projection = ViewportProjection.Perspective;
+            _yaw -= dx * 0.01f;
+            _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.56f, 1.56f);
+            RequestNextFrameRendering();
+            StateChanged?.Invoke();
+        }
+        else if (_panning)
+        {
+            var view = Matrix4x4.CreateLookAt(GetEye(), _target, GetCameraUp());
+            Matrix4x4.Invert(view, out var inv);
+            var scale = _dist * 0.0018f;
+            var right = Vector3.TransformNormal(Vector3.UnitX, inv);
+            var up = Vector3.TransformNormal(Vector3.UnitY, inv);
+            _target += (-right * dx + up * dy) * scale;
+            RequestNextFrameRendering();
+        }
+    }
+
+    public void EndCameraDrag()
+    {
+        _orbiting = false;
+        _panning = false;
+    }
+
+    public void ZoomCamera(double wheelDelta)
+    {
+        if (wheelDelta == 0) return;
+        // Exponential zoom stays smooth for high-resolution wheels and trackpads.
+        var factor = MathF.Exp((float)-wheelDelta * 0.12f);
+        _dist = Math.Clamp(_dist * factor, 0.05f, 1000f);
+        RequestNextFrameRendering();
+    }
+
+    public bool HandleCameraKey(Key key)
+    {
+        switch (key)
+        {
+            case Key.F: FrameAll(); break;
+            case Key.Z:
+                if (_selectedPrimaryGroup.HasValue) FramePrimaryGroup(_selectedPrimaryGroup.Value);
+                else FrameAll();
+                break;
+            case Key.G: ShowGrid = !ShowGrid; Refresh(); StateChanged?.Invoke(); break;
+            case Key.B: ShowSkeleton = !ShowSkeleton; Refresh(); StateChanged?.Invoke(); break;
+            case Key.D1: case Key.NumPad1: SetView(ViewPreset.Perspective); break;
+            case Key.D2: case Key.NumPad2: SetView(ViewPreset.Front); break;
+            case Key.D3: case Key.NumPad3: SetView(ViewPreset.Back); break;
+            case Key.D4: case Key.NumPad4: SetView(ViewPreset.Left); break;
+            case Key.D5: case Key.NumPad5: SetView(ViewPreset.Right); break;
+            case Key.D6: case Key.NumPad6: SetView(ViewPreset.Top); break;
+            case Key.D7: case Key.NumPad7: SetView(ViewPreset.Bottom); break;
+            default: return false;
+        }
+        return true;
+    }
+
+    public void FrameAll()
+    {
+        // "Frame all" is also the orbit-target reset: undo any prior pan and make the
+        // complete model bounds the camera's tracking point, so subsequent orbiting stays
+        // centered on the asset just like Zoom Extents Selected in a DCC viewport.
+        _target = (_boundsMin + _boundsMax) * 0.5f;
+        FitCamera();
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+    public void SetView(ViewPreset preset)
+    {
+        CurrentView = preset;
+        switch (preset)
+        {
+            case ViewPreset.Front:  _yaw = 0f;                 _pitch = 0f; break;
+            case ViewPreset.Back:   _yaw = MathF.PI;           _pitch = 0f; break;
+            case ViewPreset.Left:   _yaw = -MathF.PI * 0.5f;   _pitch = 0f; break;
+            case ViewPreset.Right:  _yaw = MathF.PI * 0.5f;    _pitch = 0f; break;
+            case ViewPreset.Top:    _yaw = 0f;                 _pitch = MathF.PI * 0.5f; break;
+            case ViewPreset.Bottom: _yaw = 0f;                 _pitch = -MathF.PI * 0.5f; break;
+            default:                _yaw = 0.7f;               _pitch = 0.35f; break;
+        }
+        // Max-style named views are orthographic; User/Perspective is perspective.
+        Projection = preset == ViewPreset.Perspective ? ViewportProjection.Perspective : ViewportProjection.Orthographic;
+        FitCamera();
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+    public void SetRenderMode(ViewportRenderMode mode)
+    {
+        RenderMode = mode;
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
 
     private void StartPlayback()
     {
@@ -162,8 +412,9 @@ public sealed class GlViewport : OpenGlControlBase
         _lastTick = now;
         if (_clip == null || _primary == null) { StopPlayback(); return; }
         _time += dt;
-        if (_time > _clip.Duration) _time -= _clip.Duration;
+        if (_time >= _clip.Duration) _time %= _clip.Duration;
         EvaluatePose(_primary, _time);
+        foreach (var extra in _extras) EvaluatePose(extra, _time);
         RequestNextFrameRendering();
     }
 
@@ -180,52 +431,129 @@ public sealed class GlViewport : OpenGlControlBase
             BoneGlobals = new Matrix4x4[Math.Max(1, mesh.Bones.Length)],
             JointMats = new Matrix4x4[Math.Max(1, mesh.DeformToBone.Length)],
             Interleaved = new float[mesh.VertexCount * 8],
+            VisibleGroups = mesh.Groups.Where(g => g.DefaultVisible).Select(g => g.Key).ToHashSet(),
         };
         ComputeBindBoneGlobals(model);
         RebuildInterleaved(model);
 
-        // index buffer, grouped by texture slot
-        var indices = new List<uint>(mesh.FaceCount * 3);
-        var groups = new Dictionary<int, List<uint>>();
-        for (var f = 0; f < mesh.FaceCount; f++)
-        {
-            var slot = mesh.FaceTexture[f];
-            if (!groups.TryGetValue(slot, out var list)) groups[slot] = list = new List<uint>();
-            var (a, b, c) = mesh.Faces[f];
-            list.Add((uint)a); list.Add((uint)b); list.Add((uint)c);
-        }
-        var batches = new List<(int, int, int)>();
-        foreach (var (slot, list) in groups)
-        {
-            var start = indices.Count;
-            indices.AddRange(list);
-            batches.Add((slot, start, list.Count));
-        }
-        model.Batches = batches.ToArray();
-        model.IndexCount = indices.Count;
+        var (indices, edges) = BuildIndexData(model);
 
         // ALWAYS defer upload to the render thread (OnOpenGlInit / OnOpenGlRender).
         // GL context is bound to the render thread only; calling GL APIs from the UI thread
         // silently produces handle=0 or corrupts state under ANGLE.
-        _pendingUpload.Add((model, indices.ToArray()));
+        _pendingUpload.Add((model, indices, edges));
         RequestNextFrameRendering(); // wake render loop so pending upload is processed promptly
         return model;
     }
 
-    private void UploadAllTextures(GlModel model)
+    private static bool IsFaceVisible(GlModel model, int face)
     {
-        var handles = new uint[model.Batches.Length];
-        for (var i = 0; i < model.Batches.Length; i++)
-        {
-            var slot = model.Batches[i].Slot;
-            handles[i] = slot >= 0 && slot < model.Mesh.Textures.Length
-                ? UploadTexture(model.Mesh.Textures[slot])
-                : 0u;
-        }
-        model.TexHandles = handles;
+        var mesh = model.Mesh;
+        // Dedicated RE cornea/refraction/tear shaders have no faithful basic-material
+        // fallback. Do not draw their geometry as an opaque white shell in the preview.
+        if (face < mesh.FaceExportHidden.Length && mesh.FaceExportHidden[face]) return false;
+        var faceGroups = mesh.FaceGroups;
+        return faceGroups.Length != mesh.FaceCount || mesh.Groups.Length == 0 ||
+               model.VisibleGroups.Contains(faceGroups[face]);
     }
 
-    private readonly List<(GlModel model, uint[] indices)> _pendingUpload = new();
+    private static (uint[] Indices, uint[] Edges) BuildIndexData(GlModel model)
+    {
+        var mesh = model.Mesh;
+        var indices = new List<uint>(mesh.FaceCount * 3);
+        var groups = new Dictionary<(int Slot, bool AlphaCutout), List<uint>>();
+        for (var f = 0; f < mesh.FaceCount; f++)
+        {
+            if (!IsFaceVisible(model, f)) continue;
+            var slot = mesh.FaceTexture[f];
+            var alphaCutout = f < mesh.FaceAlphaCutout.Length && mesh.FaceAlphaCutout[f];
+            var batchKey = (slot, alphaCutout);
+            if (!groups.TryGetValue(batchKey, out var list)) groups[batchKey] = list = new List<uint>();
+            var (a, b, c) = mesh.Faces[f];
+            list.Add((uint)a); list.Add((uint)b); list.Add((uint)c);
+        }
+        var batches = new List<(int, bool, int, int)>();
+        foreach (var (key, list) in groups)
+        {
+            var start = indices.Count;
+            indices.AddRange(list);
+            batches.Add((key.Slot, key.AlphaCutout, start, list.Count));
+        }
+        model.Batches = batches.ToArray();
+        model.IndexCount = indices.Count;
+
+        var edgeSet = new HashSet<ulong>();
+        var edgeIndices = new List<uint>(indices.Count * 2);
+        static ulong EdgeKey(uint a, uint b)
+        {
+            if (a > b) (a, b) = (b, a);
+            return ((ulong)a << 32) | b;
+        }
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var a = indices[i]; var b = indices[i + 1]; var c = indices[i + 2];
+            foreach (var (x, y) in new[] { (a, b), (b, c), (c, a) })
+                if (edgeSet.Add(EdgeKey(x, y))) { edgeIndices.Add(x); edgeIndices.Add(y); }
+        }
+        model.EdgeIndexCount = edgeIndices.Count;
+        return (indices.ToArray(), edgeIndices.ToArray());
+    }
+
+    private void UploadAllTextures(GlModel model)
+    {
+        var handles = new uint[model.Mesh.Textures.Length];
+        for (var i = 0; i < handles.Length; i++)
+        {
+            handles[i] = UploadTexture(model.Mesh.Textures[i]);
+        }
+        model.TextureHandles = handles;
+    }
+
+    private readonly List<(GlModel model, uint[] indices, uint[] edges)> _pendingUpload = new();
+    private readonly Dictionary<GlModel, (uint[] indices, uint[] edges)> _pendingIndexUpdates = new();
+    private readonly Dictionary<GlModel, uint[]> _pendingSelectionUpdates = new();
+
+    private void QueueIndexUpdate(GlModel model)
+    {
+        var data = BuildIndexData(model);
+        if (model.Vao == 0)
+        {
+            _pendingUpload.RemoveAll(x => ReferenceEquals(x.model, model));
+            _pendingUpload.Add((model, data.Indices, data.Edges));
+        }
+        else
+        {
+            _pendingIndexUpdates[model] = data;
+        }
+    }
+
+    private void QueueSelectionUpdate(GlModel model)
+    {
+        _pendingSelectionUpdates[model] = BuildSelectionEdges(model);
+    }
+
+    private uint[] BuildSelectionEdges(GlModel model)
+    {
+        if (!model.IsPrimary || !_selectedPrimaryGroup.HasValue ||
+            !model.VisibleGroups.Contains(_selectedPrimaryGroup.Value)) return [];
+        var mesh = model.Mesh;
+        var edges = new HashSet<ulong>();
+        var result = new List<uint>();
+        static ulong Key(uint a, uint b)
+        {
+            if (a > b) (a, b) = (b, a);
+            return ((ulong)a << 32) | b;
+        }
+        for (var f = 0; f < mesh.FaceCount; f++)
+        {
+            if (f >= mesh.FaceGroups.Length || mesh.FaceGroups[f] != _selectedPrimaryGroup.Value) continue;
+            var (ia, ib, ic) = mesh.Faces[f];
+            var a = (uint)ia; var b = (uint)ib; var c = (uint)ic;
+            foreach (var (x, y) in new[] { (a, b), (b, c), (c, a) })
+                if (edges.Add(Key(x, y))) { result.Add(x); result.Add(y); }
+        }
+        return result.ToArray();
+    }
 
     private uint UploadTexture(ViewportTexture tex)
     {
@@ -236,23 +564,28 @@ public sealed class GlViewport : OpenGlControlBase
 
         // ViewportTexture.Pixels is packed uint: A<<24 | R<<16 | G<<8 | B (CPU BGRA/ARGB).
         // ANGLE ES 3.0 only guarantees RGBA byte upload. Convert to byte array: R,G,B,A per pixel.
-        // Also flip rows: our pixels are top-down, GL expects bottom-up.
+        // Keep rows in the decoded image's top-down order. OpenGL's origin convention does
+        // not require a CPU-side flip here: RE mesh UVs and the decoded .tex image already
+        // agree in this orientation. Flipping the upload maps every UV island to the wrong
+        // part of asymmetric atlases (the visible striped / scrambled-material bug).
         var w = tex.Width; var h = tex.Height;
         var rgba = new byte[w * h * 4];
-        for (var y = 0; y < h; y++)
+        var src = tex.Pixels;
+        // Parallel per-row conversion (was a single-threaded per-pixel loop = the slow part of model load).
+        Parallel.For(0, h, y =>
         {
             var srcRow = y * w;
-            var dstRow = (h - 1 - y) * w * 4;
+            var off = y * w * 4;
             for (var x = 0; x < w; x++)
             {
-                var p = tex.Pixels[srcRow + x];
-                var off = dstRow + x * 4;
-                rgba[off]     = (byte)((p >> 16) & 0xFF); // R
-                rgba[off + 1] = (byte)((p >> 8)  & 0xFF); // G
-                rgba[off + 2] = (byte)(p          & 0xFF); // B
-                rgba[off + 3] = (byte)((p >> 24) & 0xFF); // A
+                var p = src[srcRow + x];
+                rgba[off]     = (byte)(p >> 16); // R
+                rgba[off + 1] = (byte)(p >> 8);  // G
+                rgba[off + 2] = (byte)p;         // B
+                rgba[off + 3] = (byte)(p >> 24); // A
+                off += 4;
             }
-        }
+        });
         unsafe
         {
             fixed (byte* p = rgba)
@@ -272,13 +605,15 @@ public sealed class GlViewport : OpenGlControlBase
         return handle;
     }
 
-    private void UploadGeometry(GlModel model, uint[] indices)
+    private void UploadGeometry(GlModel model, uint[] indices, uint[] edgeIndices)
     {
         if (_gl == null) return;
         var g = _gl;
         model.Vao = g.GenVertexArray();
         model.Vbo = g.GenBuffer();
         model.Ebo = g.GenBuffer();
+        model.EdgeEbo = g.GenBuffer();
+        model.SelectionEbo = g.GenBuffer();
 
         g.BindVertexArray(model.Vao);
         g.BindBuffer(BufferTargetARB.ArrayBuffer, model.Vbo);
@@ -294,6 +629,18 @@ public sealed class GlViewport : OpenGlControlBase
                 g.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * 4), p, BufferUsageARB.StaticDraw);
         }
 
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.EdgeEbo);
+        unsafe
+        {
+            fixed (uint* p = edgeIndices)
+                g.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(edgeIndices.Length * 4), p, BufferUsageARB.StaticDraw);
+        }
+
+        UploadSelectionData(model, BuildSelectionEdges(model));
+
+        // VAO element binding must point back at the triangle buffer for normal draws.
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.Ebo);
+
         const int stride = 8 * 4;
         g.EnableVertexAttribArray(0);
         g.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
@@ -302,6 +649,40 @@ public sealed class GlViewport : OpenGlControlBase
         g.EnableVertexAttribArray(2);
         g.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, stride, 24);
         g.BindVertexArray(0);
+    }
+
+    private void UploadIndexData(GlModel model, uint[] indices, uint[] edgeIndices)
+    {
+        if (_gl == null || model.Vao == 0) return;
+        var g = _gl;
+        g.BindVertexArray(model.Vao);
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.Ebo);
+        unsafe
+        {
+            fixed (uint* p = indices)
+                g.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * 4), p, BufferUsageARB.StaticDraw);
+        }
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.EdgeEbo);
+        unsafe
+        {
+            fixed (uint* p = edgeIndices)
+                g.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(edgeIndices.Length * 4), p, BufferUsageARB.StaticDraw);
+        }
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.Ebo);
+        g.BindVertexArray(0);
+        QueueSelectionUpdate(model);
+    }
+
+    private void UploadSelectionData(GlModel model, uint[] edges)
+    {
+        if (_gl == null || model.SelectionEbo == 0) return;
+        model.SelectionEdgeIndexCount = edges.Length;
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.SelectionEbo);
+        unsafe
+        {
+            fixed (uint* p = edges)
+                _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(edges.Length * 4), p, BufferUsageARB.DynamicDraw);
+        }
     }
 
     private void RebuildInterleaved(GlModel model)
@@ -386,7 +767,7 @@ public sealed class GlViewport : OpenGlControlBase
         if (computed[b]) return;
         var bones = model.Mesh.Bones;
         var local = bones[b].LocalBind;
-        if (time >= 0 && _clip != null && _clip.Tracks.TryGetValue(b, out var track))
+        if (time >= 0 && model.Tracks != null && model.Tracks.TryGetValue(b, out var track))
             local = EvaluateLocal(track, time, local);
 
         var parent = bones[b].ParentIndex;
@@ -435,22 +816,118 @@ public sealed class GlViewport : OpenGlControlBase
         return Quaternion.Slerp(values[i - 1], values[i], f);
     }
 
-    private void FrameCamera(ViewportMesh mesh)
+    private Dictionary<int, BoneTrack>? BuildTrackMap(GlModel model)
     {
-        if (mesh.VertexCount == 0) return;
+        if (_clip == null || _primary == null) return null;
+        if (_clip.NamedTracks.Count > 0)
+        {
+            var mapped = new Dictionary<int, BoneTrack>();
+            for (var i = 0; i < model.Mesh.Bones.Length; i++)
+                if (_clip.NamedTracks.TryGetValue(model.Mesh.Bones[i].Name, out var track)) mapped[i] = track;
+            return mapped;
+        }
+        var primaryBones = _primary.Mesh.Bones;
+        var byName = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (boneIndex, track) in _clip.Tracks)
+            if ((uint)boneIndex < (uint)primaryBones.Length)
+                byName[primaryBones[boneIndex].Name] = track;
+        var result = new Dictionary<int, BoneTrack>();
+        for (var i = 0; i < model.Mesh.Bones.Length; i++)
+            if (byName.TryGetValue(model.Mesh.Bones[i].Name, out var track)) result[i] = track;
+        return result;
+    }
+
+    private void FrameCamera()
+    {
+        RecalculateVisibleBounds();
+        _target = (_boundsMin + _boundsMax) * 0.5f;
+        CurrentView = ViewPreset.Perspective;
+        Projection = ViewportProjection.Perspective;
+        _yaw = 0.7f;
+        _pitch = 0.35f;
+        BuildGridLines();
+        FitCamera();
+    }
+
+    private void RecalculateVisibleBounds()
+    {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
-        foreach (var v in mesh.Vertices) { min = Vector3.Min(min, v); max = Vector3.Max(max, v); }
-        // Target the center of the bounding box (AABB midpoint).
-        // XZ center, Y at the vertical center — keeps the whole figure framed.
-        _target = new Vector3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, (min.Z + max.Z) * 0.5f);
-        var extentH = MathF.Max(max.X - min.X, max.Z - min.Z); // horizontal
-        var extentV = max.Y - min.Y;                            // vertical (height)
-        // Use the larger of horizontal or vertical extent so the whole body fits with FOV=45°.
-        var extent = MathF.Max(extentH, extentV);
-        _dist = MathF.Max(0.5f, extent * 1.1f);  // tight framing: 1.1× at FOV 45°
-        _yaw = 0f;      // face-on
-        _pitch = 0.05f; // very slightly above horizontal
+        var found = false;
+        void IncludeModel(GlModel model)
+        {
+            var mesh = model.Mesh;
+            for (var f = 0; f < mesh.FaceCount; f++)
+            {
+                if (!IsFaceVisible(model, f)) continue;
+                var (a, b, c) = mesh.Faces[f];
+                foreach (var index in new[] { a, b, c })
+                {
+                    if ((uint)index >= (uint)mesh.Vertices.Length) continue;
+                    var positions = model.Posed.Length == mesh.Vertices.Length ? model.Posed : mesh.Vertices;
+                    var v = positions[index];
+                    min = Vector3.Min(min, v);
+                    max = Vector3.Max(max, v);
+                    found = true;
+                }
+            }
+        }
+        if (_primary != null) IncludeModel(_primary);
+        foreach (var extra in _extras) IncludeModel(extra);
+        if (!found) { min = new Vector3(-0.5f); max = new Vector3(0.5f); }
+        _boundsMin = min;
+        _boundsMax = max;
+        BuildGridLines();
+    }
+
+    private bool TryGetPrimaryGroupBounds(int key, out Vector3 min, out Vector3 max)
+    {
+        min = new Vector3(float.MaxValue);
+        max = new Vector3(float.MinValue);
+        if (_primary == null) return false;
+        var mesh = _primary.Mesh;
+        var positions = _primary.Posed.Length == mesh.Vertices.Length ? _primary.Posed : mesh.Vertices;
+        var found = false;
+        for (var f = 0; f < mesh.FaceCount; f++)
+        {
+            if (f >= mesh.FaceGroups.Length || mesh.FaceGroups[f] != key) continue;
+            var (a, b, c) = mesh.Faces[f];
+            foreach (var index in new[] { a, b, c })
+            {
+                if ((uint)index >= (uint)positions.Length) continue;
+                min = Vector3.Min(min, positions[index]);
+                max = Vector3.Max(max, positions[index]);
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    private void UpdateStatusInfo()
+    {
+        if (_primary == null) { StatusInfo = "无模型"; return; }
+        var mesh = _primary.Mesh;
+        var visibleFaces = 0;
+        for (var f = 0; f < mesh.FaceCount; f++) if (IsFaceVisible(_primary, f)) visibleFaces++;
+        var groupInfo = mesh.Groups.Length > 0
+            ? $" | 组 {_primary.VisibleGroups.Count}/{mesh.Groups.Length}"
+            : "";
+        StatusInfo = $"顶点 {mesh.VertexCount:N0} | 面 {visibleFaces:N0} | 骨骼 {mesh.Bones.Length} | 贴图 {mesh.Textures.Length}{groupInfo}";
+    }
+
+    private void FitCamera()
+        => FitCamera(_boundsMin, _boundsMax);
+
+    private void FitCamera(Vector3 boundsMin, Vector3 boundsMax)
+    {
+        var size = boundsMax - boundsMin;
+        var radius = MathF.Max(0.05f, size.Length() * 0.5f);
+        var aspect = Bounds.Height > 1 ? (float)(Bounds.Width / Bounds.Height) : 1.6f;
+        var halfFov = MathF.PI / 8f;
+        // Bounding-sphere fit is stable for any orbit angle and never clips tall or wide assets.
+        var verticalFit = radius / MathF.Tan(halfFov);
+        var horizontalFit = radius / MathF.Tan(MathF.Atan(MathF.Tan(halfFov) * MathF.Max(0.2f, aspect)));
+        _dist = MathF.Max(0.1f, MathF.Max(verticalFit, horizontalFit) * 1.12f);
     }
 
     // ---------- OpenGL lifecycle ----------
@@ -458,29 +935,29 @@ public sealed class GlViewport : OpenGlControlBase
     protected override void OnOpenGlInit(GlInterface gl)
     {
         base.OnOpenGlInit(gl);
-        var logPath = @"C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\gl_log.txt";
         try
         {
-            System.IO.File.WriteAllText(logPath, $"Version={gl.Version}\n");
-            InitGl(gl, logPath);
+            InitGl(gl);
         }
         catch (Exception ex)
         {
-            System.IO.File.AppendAllText(logPath, "INIT FAILED: " + ex + "\n");
+            StatusInfo = "图形视口初始化失败：" + ex.Message;
+            StateChanged?.Invoke();
         }
     }
 
-    private void InitGl(GlInterface gl, string logPath)
+    private void InitGl(GlInterface gl)
     {
         _gl = GL.GetApi(gl.GetProcAddress);
-        System.IO.File.AppendAllText(logPath, "GL.GetApi ok\n");
 
         _meshProgram = CreateProgram(MeshVert, MeshFrag);
         _uMvp = _gl.GetUniformLocation(_meshProgram, "uMVP");
         _uLight = _gl.GetUniformLocation(_meshProgram, "uLightDir");
+        _uViewDir = _gl.GetUniformLocation(_meshProgram, "uViewDir");
         _uHasTex = _gl.GetUniformLocation(_meshProgram, "uHasTex");
         _uTex = _gl.GetUniformLocation(_meshProgram, "uTex");
-        _uTexDebug = _gl.GetUniformLocation(_meshProgram, "uTexDebug");
+        _uRenderMode = _gl.GetUniformLocation(_meshProgram, "uRenderMode");
+        _uAlphaCutout = _gl.GetUniformLocation(_meshProgram, "uAlphaCutout");
 
         _lineProgram = CreateProgram(LineVert, LineFrag);
         _lMvp = _gl.GetUniformLocation(_lineProgram, "uMVP");
@@ -494,15 +971,13 @@ public sealed class GlViewport : OpenGlControlBase
 
         BuildGridLines();
 
-        foreach (var (model, indices) in _pendingUpload)
+        foreach (var (model, indices, edges) in _pendingUpload)
         {
             UploadAllTextures(model);
-            UploadGeometry(model, indices);
+            UploadGeometry(model, indices, edges);
         }
         _pendingUpload.Clear();
     }
-
-    private IEnumerable<(uint, int)> _unusedMarker() { yield break; }
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
@@ -522,23 +997,34 @@ public sealed class GlViewport : OpenGlControlBase
         // This must run on the render thread where the GL context is current.
         if (_pendingUpload.Count > 0)
         {
-            foreach (var (model, indices) in _pendingUpload)
+            foreach (var (model, indices, edges) in _pendingUpload)
             {
                 UploadAllTextures(model);
-                UploadGeometry(model, indices);
+                UploadGeometry(model, indices, edges);
             }
             _pendingUpload.Clear();
-            // log state after first upload
-            var logPath = @"C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\gl_log.txt";
-            System.IO.File.AppendAllText(logPath,
-                $"After upload: primary.Vao={_primary?.Vao} batches={_primary?.Batches.Length} indexCount={_primary?.IndexCount}\n");
+        }
+        if (_pendingIndexUpdates.Count > 0)
+        {
+            foreach (var (model, data) in _pendingIndexUpdates)
+                UploadIndexData(model, data.indices, data.edges);
+            _pendingIndexUpdates.Clear();
+        }
+        if (_pendingSelectionUpdates.Count > 0)
+        {
+            foreach (var (model, edges) in _pendingSelectionUpdates)
+                UploadSelectionData(model, edges);
+            _pendingSelectionUpdates.Clear();
         }
 
         var w = (int)Bounds.Width;
         var h = (int)Bounds.Height;
         var scale = (float)(VisualRoot?.RenderScaling ?? 1.0);
-        g.Viewport(0, 0, (uint)(w * scale), (uint)(h * scale));
-        g.ClearColor(0.12f, 0.12f, 0.13f, 1f);
+        var pw = (int)(w * scale);
+        var ph = (int)(h * scale);
+        if (pw < 1 || ph < 1) return;
+        g.Viewport(0, 0, (uint)pw, (uint)ph);
+        g.ClearColor(0.105f, 0.115f, 0.13f, 1f);
         g.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
 
         var aspect = h > 0 ? (float)w / h : 1f;
@@ -550,7 +1036,10 @@ public sealed class GlViewport : OpenGlControlBase
             DrawModel(g, _primary, mvp);
         }
         foreach (var extra in _extras)
+        {
+            if (_playing || _clip != null) UploadPose(extra);
             DrawModel(g, extra, mvp);
+        }
 
         DrawLines(g, mvp);
 
@@ -559,54 +1048,118 @@ public sealed class GlViewport : OpenGlControlBase
 
     private Matrix4x4 ComputeMvp(float aspect)
     {
-        var eye = _target + new Vector3(
-            MathF.Cos(_pitch) * MathF.Sin(_yaw),
-            MathF.Sin(_pitch),
-            MathF.Cos(_pitch) * MathF.Cos(_yaw)) * _dist;
-        var view = Matrix4x4.CreateLookAt(eye, _target, Vector3.UnitY);
-        var proj = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 4, aspect, _dist * 0.01f, _dist * 20f);
+        var eye = GetEye();
+        var view = Matrix4x4.CreateLookAt(eye, _target, GetCameraUp());
+        var radius = MathF.Max(0.05f, (_boundsMax - _boundsMin).Length() * 0.5f);
+        var near = MathF.Max(0.001f, _dist - radius * 2.2f);
+        var far = MathF.Max(near + 1f, _dist + radius * 3f);
+        Matrix4x4 proj;
+        if (Projection == ViewportProjection.Orthographic)
+        {
+            var halfH = MathF.Max(0.05f, _dist * MathF.Tan(MathF.PI / 8f));
+            proj = Matrix4x4.CreateOrthographic(halfH * 2f * MathF.Max(0.1f, aspect), halfH * 2f, near, far);
+        }
+        else
+        {
+            proj = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 4, MathF.Max(0.1f, aspect), near, far);
+        }
         return view * proj;
     }
 
-    private static bool _drawLogged;
     private void DrawModel(GL g, GlModel model, Matrix4x4 mvp)
     {
-        if (!_drawLogged)
-        {
-            _drawLogged = true;
-            var logPath = @"C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\gl_log.txt";
-            System.IO.File.AppendAllText(logPath,
-                $"DrawModel: Vao={model.Vao} batches={model.Batches.Length} indexCount={model.IndexCount}\n" +
-                $"  mvp[0,0]={mvp.M11:F3} mvp[0,3]={mvp.M14:F3} mvp[3,3]={mvp.M44:F3}\n" +
-                $"  target={_target} dist={_dist:F3} yaw={_yaw:F3} pitch={_pitch:F3}\n");
-        }
         if (model.Vao == 0) return;
+        var eye = GetEye();
+        var viewDir = Vector3.Normalize(_target - eye);
         g.UseProgram(_meshProgram);
-        unsafe { g.UniformMatrix4(_uMvp, 1, true, (float*)&mvp); }
+        // Matrix4x4 is stored row-major and System.Numerics composes row vectors (v * M).
+        // OpenGL reads the same bytes as a column-major matrix, which already supplies M^T
+        // for the shader's column-vector expression (M * v). Therefore transpose MUST be false.
+        // OpenGL ES also requires transpose=false; true raises GL_INVALID_VALUE on ANGLE and
+        // leaves the previous/identity uniform active, producing the tilted, clipped "broken camera".
+        unsafe { g.UniformMatrix4(_uMvp, 1, false, (float*)&mvp); }
         g.Uniform3(_uLight, LightDir.X, LightDir.Y, LightDir.Z);
+        g.Uniform3(_uViewDir, viewDir.X, viewDir.Y, viewDir.Z);
         g.Uniform1(_uTex, 0);
-        g.Uniform1(_uTexDebug, TexDebugMode);
-        g.BindVertexArray(model.Vao);
-        for (var i = 0; i < model.Batches.Length; i++)
+        var shaderMode = RenderMode switch
         {
-            var tex = i < model.TexHandles.Length ? model.TexHandles[i] : 0u;
-            var (_, start, count) = model.Batches[i];
-            g.Uniform1(_uHasTex, tex != 0 ? 1 : 0);
-            if (tex != 0)
+            ViewportRenderMode.Textured => 1,
+            ViewportRenderMode.Solid or ViewportRenderMode.Wireframe => 2,
+            _ => 0
+        };
+        g.Uniform1(_uRenderMode, shaderMode);
+        g.BindVertexArray(model.Vao);
+        if (RenderMode != ViewportRenderMode.Wireframe)
+        {
+            g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.Ebo);
+            for (var i = 0; i < model.Batches.Length; i++)
             {
-                g.ActiveTexture(TextureUnit.Texture0);
-                g.BindTexture(TextureTarget.Texture2D, tex);
-            }
-            unsafe { g.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)(start * 4)); }
-            // check GL error once on first draw
-            if (!_drawLogged) { _drawLogged = true; }
-            var err = g.GetError();
-            if (err != GLEnum.NoError)
-            {
-                var logPath = @"C:\Users\zzjhuang\WorkBuddy\RE引擎解包工具\gl_log.txt";
-                System.IO.File.AppendAllText(logPath, $"DrawElements GL error: {err} (batch {i} start={start} count={count})\n");
+                var (slot, alphaCutout, start, count) = model.Batches[i];
+                var tex = slot >= 0 && slot < model.TextureHandles.Length ? model.TextureHandles[slot] : 0u;
+                g.Uniform1(_uHasTex, tex != 0 ? 1 : 0);
+                g.Uniform1(_uAlphaCutout, alphaCutout && tex != 0 ? 1 : 0);
+                if (tex != 0)
+                {
+                    g.ActiveTexture(TextureUnit.Texture0);
+                    g.BindTexture(TextureTarget.Texture2D, tex);
+                }
+                unsafe { g.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)(start * 4)); }
             }
         }
+        g.BindVertexArray(0);
+
+        if (RenderMode is ViewportRenderMode.Wireframe or ViewportRenderMode.TexturedEdges)
+            DrawModelEdges(g, model, mvp);
+        if (model.IsPrimary && model.SelectionEdgeIndexCount > 0)
+            DrawSelectionEdges(g, model, mvp);
+    }
+
+    private Vector3 GetEye() => _target + new Vector3(
+        MathF.Cos(_pitch) * MathF.Sin(_yaw), MathF.Sin(_pitch),
+        MathF.Cos(_pitch) * MathF.Cos(_yaw)) * _dist;
+
+    private Vector3 GetCameraUp() => MathF.Abs(MathF.Cos(_pitch)) < 0.01f
+        ? (_pitch > 0 ? -Vector3.UnitZ : Vector3.UnitZ)
+        : Vector3.UnitY;
+
+    /// <summary>Projects the fixed world X/Y/Z directions into viewport screen space.</summary>
+    public Vector2[] GetWorldAxisScreenDirections()
+    {
+        var view = Matrix4x4.CreateLookAt(GetEye(), _target, GetCameraUp());
+        return new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ }.Select(axis =>
+        {
+            var camera = Vector3.TransformNormal(axis, view);
+            var screen = new Vector2(camera.X, -camera.Y);
+            return screen.LengthSquared() > 1e-6f ? Vector2.Normalize(screen) : Vector2.Zero;
+        }).ToArray();
+    }
+
+    private void DrawModelEdges(GL g, GlModel model, Matrix4x4 mvp)
+    {
+        if (model.EdgeEbo == 0 || model.EdgeIndexCount == 0) return;
+        g.UseProgram(_lineProgram);
+        unsafe { g.UniformMatrix4(_lMvp, 1, false, (float*)&mvp); }
+        g.Uniform4(_lColor, 0.06f, 0.08f, 0.1f, 1f);
+        g.BindVertexArray(model.Vao);
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.EdgeEbo);
+        unsafe { g.DrawElements(PrimitiveType.Lines, (uint)model.EdgeIndexCount, DrawElementsType.UnsignedInt, null); }
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.Ebo);
+        g.BindVertexArray(0);
+    }
+
+    private void DrawSelectionEdges(GL g, GlModel model, Matrix4x4 mvp)
+    {
+        g.UseProgram(_lineProgram);
+        unsafe { g.UniformMatrix4(_lMvp, 1, false, (float*)&mvp); }
+        g.Uniform4(_lColor, 1f, 0.55f, 0.08f, 1f);
+        g.BindVertexArray(model.Vao);
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.SelectionEbo);
+        g.DepthFunc(DepthFunction.Lequal);
+        g.LineWidth(2f);
+        unsafe { g.DrawElements(PrimitiveType.Lines, (uint)model.SelectionEdgeIndexCount, DrawElementsType.UnsignedInt, null); }
+        g.LineWidth(1f);
+        g.DepthFunc(DepthFunction.Less);
+        g.BindBuffer(BufferTargetARB.ElementArrayBuffer, model.Ebo);
         g.BindVertexArray(0);
     }
 
@@ -615,13 +1168,26 @@ public sealed class GlViewport : OpenGlControlBase
     private void BuildGridLines()
     {
         _lineVerts.Clear();
-        const float extent = 4f, step = 0.5f;
-        for (var v = -extent; v <= extent + 1e-4f; v += step)
+        var modelSize = MathF.Max(0.1f, MathF.Max(_boundsMax.X - _boundsMin.X, _boundsMax.Z - _boundsMin.Z));
+        var exponent = MathF.Floor(MathF.Log10(modelSize));
+        var step = MathF.Pow(10f, exponent - 1f);
+        if (modelSize / step > 30f) step *= 2f;
+        var extent = MathF.Ceiling(modelSize * 1.5f / (step * 10f)) * step * 10f;
+        extent = MathF.Max(extent, step * 10f);
+        var lineIndex = 0;
+        for (var v = -extent; v <= extent + step * 0.1f; v += step)
         {
             AddLineVertex(new Vector3(v, 0, -extent)); AddLineVertex(new Vector3(v, 0, extent));
             AddLineVertex(new Vector3(-extent, 0, v)); AddLineVertex(new Vector3(extent, 0, v));
+            lineIndex++;
         }
         _gridLineCount = _lineVerts.Count / 3;
+        _gridMinorCount = _gridLineCount;
+
+        // XYZ origin triad, drawn separately with conventional DCC colors.
+        AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(extent * 0.35f, 0, 0));
+        AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(0, extent * 0.35f, 0));
+        AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(0, 0, extent * 0.35f));
     }
 
     private void AddLineVertex(Vector3 v)
@@ -631,7 +1197,8 @@ public sealed class GlViewport : OpenGlControlBase
 
     private void DrawLines(GL g, Matrix4x4 mvp)
     {
-        var total = _gridLineCount;
+        var persistentCount = _gridLineCount + 6;
+        var total = persistentCount;
         var skeletonStart = _lineVerts.Count / 3;
 
         if (ShowSkeleton && _primary != null && _primary.Mesh.Bones.Length > 0)
@@ -651,7 +1218,7 @@ public sealed class GlViewport : OpenGlControlBase
         if (total == 0) return;
 
         g.UseProgram(_lineProgram);
-        unsafe { g.UniformMatrix4(_lMvp, 1, true, (float*)&mvp); }
+        unsafe { g.UniformMatrix4(_lMvp, 1, false, (float*)&mvp); }
         g.BindVertexArray(_lineVao);
         g.BindBuffer(BufferTargetARB.ArrayBuffer, _lineVbo);
         var floats = _lineVerts.ToArray();
@@ -663,17 +1230,29 @@ public sealed class GlViewport : OpenGlControlBase
         g.EnableVertexAttribArray(0);
         g.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 12, 0);
 
-        g.Uniform4(_lColor, 0.35f, 0.35f, 0.35f, 1f);
-        g.DrawArrays(PrimitiveType.Lines, 0, (uint)_gridLineCount);
-        if (total > _gridLineCount)
+        if (ShowGrid)
         {
-            g.Uniform4(_lColor, 0.3f, 0.5f, 1f, 1f);
-            g.DrawArrays(PrimitiveType.Lines, _gridLineCount, (uint)(total - _gridLineCount));
+            g.Uniform4(_lColor, 0.25f, 0.28f, 0.32f, 1f);
+            g.DrawArrays(PrimitiveType.Lines, 0, (uint)_gridMinorCount);
+        }
+        if (ShowAxes)
+        {
+            g.Uniform4(_lColor, 0.9f, 0.18f, 0.18f, 1f); // X red
+            g.DrawArrays(PrimitiveType.Lines, _gridLineCount, 2);
+            g.Uniform4(_lColor, 0.2f, 0.78f, 0.3f, 1f);  // Y green
+            g.DrawArrays(PrimitiveType.Lines, _gridLineCount + 2, 2);
+            g.Uniform4(_lColor, 0.25f, 0.48f, 1f, 1f);   // Z blue
+            g.DrawArrays(PrimitiveType.Lines, _gridLineCount + 4, 2);
+        }
+        if (total > persistentCount)
+        {
+            g.Uniform4(_lColor, 0.25f, 0.65f, 1f, 1f);
+            g.DrawArrays(PrimitiveType.Lines, persistentCount, (uint)(total - persistentCount));
         }
         g.BindVertexArray(0);
 
         // reset skeleton verts for next frame (grid is persistent)
-        _lineVerts.RemoveRange(_gridLineCount * 3, _lineVerts.Count - _gridLineCount * 3);
+        _lineVerts.RemoveRange(persistentCount * 3, _lineVerts.Count - persistentCount * 3);
     }
 
     // ---------- shaders ----------
@@ -700,17 +1279,29 @@ public sealed class GlViewport : OpenGlControlBase
         in vec3 vNormal;
         in vec2 vUV;
         uniform vec3 uLightDir;
+        uniform vec3 uViewDir;
         uniform sampler2D uTex;
         uniform int uHasTex;
-        uniform int uTexDebug;
+        uniform int uRenderMode;
+        uniform int uAlphaCutout;
         out vec4 FragColor;
         void main() {
-            float lum = 0.25 + 0.75 * abs(dot(normalize(vNormal), -uLightDir));
-            if (uTexDebug == 1) { FragColor = vec4(vec3(0.82) * lum, 1.0); return; }
-            if (uTexDebug == 3) { FragColor = vec4(fract(vUV), 0.0, 1.0); return; }
-            vec3 base = uHasTex == 1 ? texture(uTex, vUV).rgb : vec3(0.8);
-            if (uTexDebug == 2) { FragColor = vec4(base, 1.0); return; }
-            FragColor = vec4(base * lum, 1.0);
+            vec3 n = normalize(vNormal);
+            vec4 texel = (uHasTex == 1 && uRenderMode != 2) ? texture(uTex, vUV) : vec4(0.62, 0.66, 0.72, 1.0);
+            if (uAlphaCutout == 1 && uRenderMode != 2 && texel.a < 0.5) discard;
+            vec3 baseSrgb = texel.rgb;
+            if (uRenderMode == 1) { FragColor = vec4(baseSrgb, 1.0); return; }
+            // ALBD textures are authored in sRGB. Decode before lighting and encode once
+            // afterwards; treating encoded values as linear and then applying gamma again
+            // washes dark cloth into the pale pink/white seen in the broken preview.
+            vec3 baseLinear = pow(max(baseSrgb, vec3(0.0)), vec3(2.2));
+            float key = max(0.0, dot(n, -uLightDir));
+            float fill = max(0.0, dot(n, normalize(vec3(0.55, 0.15, -0.8))));
+            float rim = pow(1.0 - abs(dot(n, normalize(-uViewDir))), 3.0);
+            float light = 0.30 + key * 0.58 + fill * 0.12;
+            vec3 colorLinear = baseLinear * light + baseLinear * rim * 0.08;
+            vec3 colorSrgb = pow(clamp(colorLinear, 0.0, 1.0), vec3(1.0 / 2.2));
+            FragColor = vec4(colorSrgb, 1.0);
         }
         """;
 
@@ -779,9 +1370,10 @@ public sealed class GlViewport : OpenGlControlBase
         base.OnPointerPressed(e);
         Focus(); // ensure this control has keyboard/pointer focus for hit-testing
         var p = e.GetCurrentPoint(this);
-        _lastPointer = p.Position;
-        if (p.Properties.IsLeftButtonPressed) _orbiting = true;
-        if (p.Properties.IsRightButtonPressed || p.Properties.IsMiddleButtonPressed) _panning = true;
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        BeginCameraDrag(p.Position,
+            p.Properties.IsLeftButtonPressed || (alt && p.Properties.IsMiddleButtonPressed),
+            p.Properties.IsRightButtonPressed || (p.Properties.IsMiddleButtonPressed && !alt));
         e.Pointer.Capture(this);
         e.Handled = true;
     }
@@ -789,38 +1381,14 @@ public sealed class GlViewport : OpenGlControlBase
     protected override void OnPointerMoved(Avalonia.Input.PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        var p = e.GetCurrentPoint(this);
-        var pos = p.Position;
-        var dx = (float)(pos.X - _lastPointer.X);
-        var dy = (float)(pos.Y - _lastPointer.Y);
-        _lastPointer = pos;
-
-        if (_orbiting)
-        {
-            _yaw -= dx * 0.01f;
-            _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.5f, 1.5f);
-            RequestNextFrameRendering();
-        }
-        else if (_panning)
-        {
-            var view = Matrix4x4.CreateLookAt(
-                _target + new Vector3(MathF.Cos(_pitch) * MathF.Sin(_yaw), MathF.Sin(_pitch), MathF.Cos(_pitch) * MathF.Cos(_yaw)) * _dist,
-                _target, Vector3.UnitY);
-            Matrix4x4.Invert(view, out var inv);
-            var scale = _dist * 0.0018f;
-            var right = Vector3.TransformNormal(Vector3.UnitX, inv);
-            var up = Vector3.TransformNormal(Vector3.UnitY, inv);
-            _target += (-right * dx + up * dy) * scale;
-            RequestNextFrameRendering();
-        }
+        UpdateCameraDrag(e.GetPosition(this));
         e.Handled = true;
     }
 
     protected override void OnPointerReleased(Avalonia.Input.PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        _orbiting = false;
-        _panning = false;
+        EndCameraDrag();
         e.Pointer.Capture(null);
         e.Handled = true;
     }
@@ -828,8 +1396,13 @@ public sealed class GlViewport : OpenGlControlBase
     protected override void OnPointerWheelChanged(Avalonia.Input.PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        _dist = Math.Clamp(_dist * (e.Delta.Y > 0 ? 0.9f : 1.1f), 0.05f, 1000f);
-        RequestNextFrameRendering();
+        ZoomCamera(e.Delta.Y);
         e.Handled = true;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        e.Handled = HandleCameraKey(e.Key);
     }
 }

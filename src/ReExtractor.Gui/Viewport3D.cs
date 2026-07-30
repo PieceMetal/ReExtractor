@@ -59,8 +59,13 @@ public sealed class Viewport3D : Control
     private WriteableBitmap? _bmp;      // front (currently presented)
     private WriteableBitmap? _bmpBack;  // back (being filled — no lock contention with the compositor)
     private int _fbW, _fbH;
-    /// <summary>Internal render resolution scale (Image control upscales to the control size). 1.0 = full quality.</summary>
-    public float RenderScale { get; set; } = 1.0f; // internal render resolution scale; 1.0 = native (quality-first), Image upscales if < 1
+    /// <summary>Supersampling scale when inspecting a STATIC pose (3 = 9x SSAA — kills texture minification grain).</summary>
+    public float IdleRenderScale { get; set; } = 3.0f;
+    /// <summary>Render scale during ANIMATION playback or camera drag (1 = native — keeps the CPU rasterizer interactive).</summary>
+    public float PlayRenderScale { get; set; } = 1.0f;
+    /// <summary>Effective render scale: supersample a static pose, drop to native while animating or dragging (interactive refinement). The Image control downsamples to the view size.</summary>
+    private float EffectiveScale => (_playing || _dragging) ? PlayRenderScale : IdleRenderScale;
+    private bool _dragging;
 
     // multi-threaded rasterization: disjoint row bands into a shared framebuffer (no merge pass)
     private readonly int _threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
@@ -98,15 +103,19 @@ public sealed class Viewport3D : Control
     /// <summary>Smoothed frames-per-second of the render loop (meaningful during playback).</summary>
     public double CurrentFps { get; private set; }
     private DateTime _lastRenderAt = DateTime.UtcNow;
-    private int _frameDumpCount; // debug: limit framebuffer dumps to first N frames (currently disabled)
 
-    // additional models (bind-pose extras, e.g. armor parts assembled onto the primary model)
+    // additional models — each gets its own independent skinning evaluation so they all animate.
     private sealed class ExtraModel
     {
         public required ViewportMesh Mesh;
         public required Vector3[] Posed;
         public required float[] Intensities;
         public required string Name;
+        // per-extra skinning buffers (populated by AddMesh, updated by EvaluateExtraPose)
+        public Matrix4x4[]? BoneGlobals;
+        public Matrix4x4[]? JointMats;
+        // tracks remapped: key = THIS extra's bone index, value = track from _clip matched by bone name
+        public Dictionary<int, BoneTrack>? RemappedTracks;
     }
     private readonly List<ExtraModel> _extras = new();
     public int ExtraModelCount => _extras.Count;
@@ -146,10 +155,17 @@ public sealed class Viewport3D : Control
         {
             intensities[i] = 0.25f + 0.75f * MathF.Abs(Vector3.Dot(mesh.Normals[i], light));
         });
+        // pre-allocate skinning buffers so EvaluateExtraPose can animate this extra
+        var boneGlobals = mesh.Bones.Length > 0 ? new Matrix4x4[mesh.Bones.Length] : null;
+        var jointMats = mesh.DeformToBone.Length > 0 ? new Matrix4x4[mesh.DeformToBone.Length] : null;
+        if (boneGlobals != null) ComputeBindGlobalsFor(mesh.Bones, boneGlobals);
         var renderNow = false;
         lock (_renderGate)
         {
-            _extras.Add(new ExtraModel { Mesh = mesh, Posed = posed, Intensities = intensities, Name = name });
+            var extra = new ExtraModel { Mesh = mesh, Posed = posed, Intensities = intensities, Name = name,
+                                           BoneGlobals = boneGlobals, JointMats = jointMats };
+            if (_clip != null) RemapTracksForExtra(extra);
+            _extras.Add(extra);
             if (!_playing) renderNow = true;
             else _poseDirty = true;
         }
@@ -191,6 +207,8 @@ public sealed class Viewport3D : Control
             {
                 _clip = clip;
                 _time = 0;
+                // remap animation tracks onto every extra's skeleton by bone name
+                foreach (var ex in _extras) RemapTracksForExtra(ex);
                 if (clip != null) EvaluatePose(0);
             }
             if (clip != null && clip.Duration > 0) StartPlayback();
@@ -201,7 +219,8 @@ public sealed class Viewport3D : Control
 
     public void TogglePlayback()
     {
-        if (_playing) StopPlayback(); else if (HasAnimation) StartPlayback();
+        // stopping returns to a static frame — re-render at IdleRenderScale (supersampled) for full quality
+        if (_playing) { StopPlayback(); RenderFrame(); } else if (HasAnimation) StartPlayback();
         StateChanged?.Invoke();
     }
 
@@ -220,16 +239,17 @@ public sealed class Viewport3D : Control
             StopPlayback();
             if (_clip == null || _clip.Duration <= 0) return;
 
+            // mark playing BEFORE sizing the framebuffer so it uses PlayRenderScale (native speed)
+            _playing = true;
             lock (_renderGate)
             {
-                var w0 = (int)(Bounds.Width * RenderScale);
-                var h0 = (int)(Bounds.Height * RenderScale);
+                var w0 = (int)(Bounds.Width * EffectiveScale);
+                var h0 = (int)(Bounds.Height * EffectiveScale);
                 if (w0 >= 8 && h0 >= 8) EnsureFramebuffer(w0, h0);
             }
 
             var cts = new CancellationTokenSource();
             _workerCts = cts;
-            _playing = true;
             _poseDirty = true;
             _frameReady = false;
             _lastTick = DateTime.UtcNow;
@@ -317,7 +337,7 @@ public sealed class Viewport3D : Control
             }
         }
 
-        if (shouldStop) { StopPlayback(); return; }
+        if (shouldStop) { StopPlayback(); RenderFrame(); return; }
         if (framePresented) FrameReady?.Invoke(); // external callback outside _renderGate
     }
 
@@ -338,6 +358,14 @@ public sealed class Viewport3D : Control
         var computed = new bool[_mesh.Bones.Length];
         for (var b = 0; b < _mesh.Bones.Length; b++)
             ComputeGlobal(b, _mesh.Bones, _boneGlobals, computed, 0);
+    }
+
+    /// <summary>Compute bind-pose global transforms for an arbitrary bone list (used by AddMesh for extras).</summary>
+    private void ComputeBindGlobalsFor(ViewportBone[] bones, Matrix4x4[] globals)
+    {
+        var computed = new bool[bones.Length];
+        for (var b = 0; b < bones.Length; b++)
+            ComputeGlobal(b, bones, globals, computed, 0);
     }
 
     private void ComputeIntensities()
@@ -391,19 +419,90 @@ public sealed class Viewport3D : Control
             posedN[i] = accN.LengthSquared() < 1e-8f ? n : Vector3.Normalize(accN);
         });
         ComputeIntensities();
+        // also animate all extra models (each gets independent skinning with shared clip)
+        foreach (var ex in _extras) EvaluateExtraPose(ex, time);
     }
 
-    private void ComputeGlobal(int b, ViewportBone[] bones, Matrix4x4[] globals, bool[] computed, float time)
+    /// <summary>Evaluate skinning pose for one extra model using the current _clip (shared animation).</summary>
+    private void EvaluateExtraPose(ExtraModel extra, float time)
+    {
+        var mesh = extra.Mesh;
+        var bones = mesh.Bones;
+        if (bones.Length == 0 || extra.BoneGlobals == null || extra.JointMats == null) return;
+        // compute animated global transforms for this extra's skeleton (using name-remapped tracks)
+        var computed = new bool[bones.Length];
+        for (var b = 0; b < bones.Length; b++)
+            ComputeGlobal(b, bones, extra.BoneGlobals, computed, time, extra.RemappedTracks);
+        // build joint matrices
+        for (var j = 0; j < mesh.DeformToBone.Length && j < extra.JointMats.Length; j++)
+        {
+            var bone = mesh.DeformToBone[j];
+            extra.JointMats[j] = bones[bone].InverseGlobalBind * extra.BoneGlobals[bone];
+        }
+        // skin vertices
+        var verts = mesh.Vertices;
+        var norms = mesh.Normals;
+        var weights = mesh.Weights;
+        var jointMats = extra.JointMats;
+        var posed = extra.Posed;
+        Parallel.For(0, verts.Length, i =>
+        {
+            var ws = weights[i];
+            var v = verts[i];
+            var n = norms[i];
+            var acc = Vector3.Zero;
+            var accN = Vector3.Zero;
+            foreach (var (joint, w) in ws)
+            {
+                if (joint >= jointMats.Length) continue;
+                acc += Vector3.Transform(v, jointMats[joint]) * w;
+                accN += Vector3.TransformNormal(n, jointMats[joint]) * w;
+            }
+            posed[i] = acc;
+            // normals
+            extra.Intensities[i] = 0.25f + 0.75f * MathF.Abs(Vector3.Dot(
+                accN.LengthSquared() < 1e-8f ? n : Vector3.Normalize(accN), LightDir));
+        });
+    }
+
+    /// <summary>
+    /// Remap _clip tracks onto an extra model's skeleton by matching bone names.
+    /// This mirrors what LoadAnimation does at load time (boneHash → meshBoneIndex),
+    /// but at runtime so extras with different bone ordering still get animated.
+    /// </summary>
+    private void RemapTracksForExtra(ExtraModel extra)
+    {
+        if (_clip == null || _mesh == null) { extra.RemappedTracks = null; return; }
+        // build name → main-model-bone-index lookup from _clip.Tracks keys
+        var mainBones = _mesh.Bones;
+        var mainNameToTrackIdx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (idx, track) in _clip.Tracks)
+            if (idx >= 0 && idx < mainBones.Length)
+                mainNameToTrackIdx[mainBones[idx].Name] = idx;
+
+        var extraBones = extra.Mesh.Bones;
+        var remapped = new Dictionary<int, BoneTrack>();
+        for (var eb = 0; eb < extraBones.Length; eb++)
+        {
+            if (mainNameToTrackIdx.TryGetValue(extraBones[eb].Name, out var mainIdx))
+                if (_clip.Tracks.TryGetValue(mainIdx, out var track))
+                    remapped[eb] = track;
+        }
+        extra.RemappedTracks = remapped;
+    }
+
+    private void ComputeGlobal(int b, ViewportBone[] bones, Matrix4x4[] globals, bool[] computed, float time, Dictionary<int, BoneTrack>? tracks = null)
     {
         if (computed[b]) return;
         var local = bones[b].LocalBind;
-        if (_clip != null && _clip.Tracks.TryGetValue(b, out var track))
+        var src = tracks ?? (_clip?.Tracks);
+        if (src != null && src.TryGetValue(b, out var track))
             local = EvaluateLocal(track, time, local);
 
         var parent = bones[b].ParentIndex;
         if (parent >= 0)
         {
-            ComputeGlobal(parent, bones, globals, computed, time);
+            ComputeGlobal(parent, bones, globals, computed, time, tracks);
             globals[b] = local * globals[parent];
         }
         else
@@ -512,8 +611,8 @@ public sealed class Viewport3D : Control
         var presented = false;
         lock (_renderGate)
         {
-            var w = (int)(Bounds.Width * RenderScale);
-            var h = (int)(Bounds.Height * RenderScale);
+            var w = (int)(Bounds.Width * EffectiveScale);
+            var h = (int)(Bounds.Height * EffectiveScale);
             if (w < 8 || h < 8) return;
             EnsureFramebuffer(w, h);
             if (_bmp == null) return;
@@ -932,8 +1031,8 @@ public sealed class Viewport3D : Control
     // self-healing: rebuild framebuffer when bounds change (called from layout pass)
     public void EnsureSizeForCurrentBounds()
     {
-        var w = (int)(Bounds.Width * RenderScale);
-        var h = (int)(Bounds.Height * RenderScale);
+        var w = (int)(Bounds.Width * EffectiveScale);
+        var h = (int)(Bounds.Height * EffectiveScale);
         if (w >= 8 && h >= 8 && (w != _fbW || h != _fbH))
             RenderFrame();
     }
@@ -953,6 +1052,7 @@ public sealed class Viewport3D : Control
         _lastPointer = pos;
         _orbiting = orbit;
         _panning = pan;
+        _dragging = true; // drop to PlayRenderScale while dragging for interactivity
     }
 
     /// <summary>Continue a camera drag.</summary>
@@ -995,6 +1095,8 @@ public sealed class Viewport3D : Control
     {
         _orbiting = false;
         _panning = false;
+        _dragging = false;
+        RenderFrame(); // re-render once at IdleRenderScale (supersampled) for a clean static image
     }
 
     public void Zoom(double delta)

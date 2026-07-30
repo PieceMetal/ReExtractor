@@ -10,16 +10,19 @@ using SixLabors.ImageSharp.PixelFormats;
 
 string gameDir = @"E:\Steam\steamapps\common\OnimushaWotS_Demo";
 string listFile = @"D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list";
-string outDir = @"D:\texdump\mdf2_diag";
+string outDir = Path.Combine(Path.GetTempPath(), "ReExtractor", "mdf2_diag");
 Directory.CreateDirectory(outDir);
 
 var pak = new PakService();
 pak.AddPaksFromGameDir(gameDir);
 pak.LoadListFile(listFile);
 
-// Test ch001_00_20 (the hair mesh that shows rainbow noise)
-string meshPath = "natives/stm/art/model/character/ch0/ch001_00/20/ch001_00_20.mesh.251215606";
-string mdfPath = "natives/stm/art/model/character/ch0/ch001_00/20/ch001_00_20.mdf2.50";
+string meshPath = args.Length > 0
+    ? args[0]
+    : "natives/stm/art/model/character/ch0/ch001_00/20/ch001_00_20.mesh.251215606";
+string mdfPath = args.Length > 1
+    ? args[1]
+    : meshPath[..meshPath.IndexOf(".mesh.", StringComparison.OrdinalIgnoreCase)] + ".mdf2.50";
 
 Console.WriteLine("=== MDF2 Diagnosis ===");
 
@@ -39,6 +42,8 @@ if (mdfStream != null)
             if (mat.Textures != null)
                 foreach (var t in mat.Textures)
                     Console.WriteLine($"      texType='{t.texType}' path='{t.texPath}'");
+            foreach (var p in mat.Parameters)
+                Console.WriteLine($"      PARAM '{p.paramName}' = {p.parameter}");
         }
     }
     else Console.WriteLine("  MDF2 READ FAILED");
@@ -58,9 +63,10 @@ if (meshStream != null)
         meshStream, meshPath,
         openResource: (path) =>
         {
-            var s = pak.ReadFile(path);
-            return s ?? null;
+            try { return pak.ReadFile(path); }
+            catch (FileNotFoundException) { return null; }
         });
+    Console.WriteLine($"  FBX-safe hidden eye-overlay faces: {vm.FaceExportHidden.Count(hidden => hidden)}");
     
     Console.WriteLine($"  MaterialNames in mesh: {vm.Textures.Length} texture slots used");
     for (var t = 0; t < vm.Textures.Length; t++)
@@ -102,6 +108,13 @@ if (meshStream != null)
         Console.WriteLine($"       dumped to {rawPath} + .png");
     }
     
+    Console.WriteLine("  Material face usage:");
+    for (var t = 0; t < vm.Textures.Length; t++)
+    {
+        var faceIds = Enumerable.Range(0, vm.FaceCount).Where(face => vm.FaceTexture[face] == t).ToArray();
+        Console.WriteLine($"    MATERIAL_USAGE slot={t} faces={faceIds.Length} alphaCutout={faceIds.Count(face => face < vm.FaceAlphaCutout.Length && vm.FaceAlphaCutout[face])} name='{vm.Textures[t].Name}'");
+    }
+
     // Check face-to-texture mapping
     Console.WriteLine("\n=== Face->Texture mapping (first 20 faces) ===");
     var texCounts = new System.Collections.Generic.Dictionary<int, int>();

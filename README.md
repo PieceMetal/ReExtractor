@@ -1,96 +1,86 @@
 # ReExtractor
 
-轻量级 RE 引擎资源提取器：解包 → 预览 → 导出 UE5 可用的 FBX。
+![ReExtractor 图标](src/ReExtractor.Gui/Assets/AppIcon.png)
 
-**定位**：不做 Mod、不做编辑。只做"从 PAK 里把模型/动画/贴图拿出来，变成 DCC/UE 能用的文件"。
-交互形态对标 ree-pak-gui（轻、快、专注提取），解析核心复用 REE-Content-Editor 的底层库 RE-Engine-Lib。
+ReExtractor 是一款面向 Windows 的 RE Engine 资源工作台，专注于将游戏 PAK 中的模型、动画和贴图提取出来，并整理为 DCC 软件与 Unreal Engine 可继续使用的文件。
 
-## 首个服务目标
+> 项目定位：解包、预览和导出。不提供 Mod 编辑、PAK 重打包或游戏资源传播服务。
 
-《鬼武者：剑之道》DEMO（OWOTS）：
-- 武藏 `natives/stm/art/model/character/ch0/ch001_00/`
-- 佐佐木 `natives/stm/art/model/character/ch0/ch033_00/` + 动画 `natives/stm/motion/enemy/em503/`
-- 产出：带骨骼+动画的 FBX，可直接导入 UE5。
+## 主要功能
 
-## 技术栈
+- 加载单个或多个 PAK，也可选择游戏目录自动扫描。
+- 按基础包与 Patch PAK 顺序合并，使新资源覆盖旧资源。
+- 本地与在线 list 管理，支持路径还原、模糊搜索与资源提取。
+- TEX 贴图预览与 PNG/DDS 输出。
+- Mesh 模型、材质、骨骼和动画预览。
+- 角色分件合并，合并后同步播放动画。
+- 模型 FBX 与动画 FBX 分开导出，支持 30 FPS / 60 FPS。
+- 便携式目录管理：list、设置、日志、临时文件和默认输出均位于 EXE 附近。
 
-| 层 | 选型 | 说明 |
-|---|---|---|
-| 解析核心 | RE-Engine-Lib（kagenocookie，MIT） | PAK / .mesh / .tex / .motlist 解析，不重复逆向 |
-| 语言/框架 | C# / .NET 10（REE-Lib 需 C# 14 语法） | 本机另装 .NET 10 SDK 于 ~/.dotnet10 |
-| UI（二期） | Avalonia + 3D 视口 | 轻量壳：PAK拖入→文件树→预览→一键导出 |
-| 导出 | FBX（模型+骨骼+动画）；贴图 PNG/DDS | 动画链 motlist→glTF→FBX（Blender headless 兜底） |
+## 当前支持状态
 
-## 里程碑
+| 游戏 / 能力 | 状态 |
+| --- | --- |
+| 《鬼武者：剑之道》DEMO | 已验证 PAK、贴图、模型、骨骼、动画与 FBX 工作流 |
+| 《街头霸王 6》 | PAK 解包与 list 路径还原可用；模型材质与动画为实验性支持 |
+| 其他 RE Engine 游戏 | 取决于 PAK 版本、文件 list 与资源格式版本 |
 
-- [x] M0：解决方案骨架 + CLI 实读 OWOTS PAK（含 patch 优先级、list 路径还原）
-- [x] M1：.tex 预览与 PNG 导出（CLI tex2png，BC1-7+非压缩格式，真实贴图验证通过）
-- [x] M2：.mesh 解析 + glTF 静态导出（CLI mesh2glb，武藏4.6万顶点验证通过）
-- [x] M3：骨骼+蒙皮导出（GLB含骨架+蒙皮，Blender验证267骨/22蒙皮网格）
-- [x] M4：.motlist 动画解析 + 动画 glTF 导出（CLI anim2glb，佐佐木basemove 1116帧验证通过；FBX可经Blender/UE直接转换）
-- [x] M5：Avalonia GUI（加载PAK/搜索/tex图片预览/mesh+动画Blender渲染预览/一键导出，dark主题）
+新游戏并不是仅更换 list 就能完整支持。PAK 解包、Mesh、Tex、MDF 和 Motlist 都可能需要新的格式适配与真实样本验证。
 
-## 结构
+## 下载与使用
 
-```
-libs/RE-Engine-Lib   # 解析核心（git submodule，见下方「构建与运行」）
-src/ReExtractor.Core # PakService：多PAK优先级 + list路径还原 + 提取
-src/ReExtractor.Cli  # M0 验证工具：stats / find / extract
-src/ReExtractor.Gui  # M5 Avalonia GUI（加载PAK/搜索/预览/导出）
-tools/               # .NET 10 离线探针（texprobe*.cs 等，dotnet run 直接跑）
-```
+1. 在 GitHub Releases 下载 ReExtractor-v0.1.0-win-x64.zip。
+2. 解压到一个可写目录，运行 ReExtractor.Gui.exe。
+3. 打开“设置”，选择 Blender 可执行文件与默认导出目录。
+4. 在 list 管理器中选择或下载对应游戏的 list。
+5. 拖入 PAK，或选择游戏目录后扫描全部 PAK。
+6. 双击资源进行预览，使用右键菜单提取、合并或加载动画。
 
-## 构建与运行
+### FBX 导出说明
 
-### 1. 克隆（含 submodule）
+- FBX 转换需要 Blender，请在设置中选择 blender.exe。
+- “导出模型”会导出当前预览中可见的合并模型。
+- “导出动画”可选择当前动画或 MotionList 内全部动画，每个动画单独输出，不携带模型网格。
+- 导入 UE 前仍建议检查骨骼方向、材质贴图与根运动。RE Engine 材质不能被 FBX 完整还原。
 
-```bash
-git clone https://git.code.tencent.com/PieceMetal/ReExtractor.git
+## 便携目录结构
+
+~~~text
+ReExtractor/
+├─ ReExtractor.Gui.exe
+├─ filelists/       # 本地路径 list
+├─ output/          # 默认导出目录
+├─ temp/            # 临时文件
+├─ data/            # 用户设置
+└─ logs/            # 运行日志
+~~~
+
+## 源码构建
+
+环境：Windows 10/11、.NET 10 SDK；如需 FBX 转换，另行安装 Blender。
+
+~~~powershell
+git clone --recurse-submodules https://github.com/PieceMetal/ReExtractor.git
 cd ReExtractor
-git submodule update --init      # 拉取 libs/RE-Engine-Lib 解析核心
-```
+dotnet build ReExtractor.sln
+dotnet run --project src/ReExtractor.Gui/ReExtractor.Gui.csproj
+~~~
 
-> ⚠️ 必须执行 `git submodule update --init`，否则 `libs/RE-Engine-Lib` 为空目录，
-> `src/ReExtractor.Core` 的 `ProjectReference` 会找不到 `REE-Lib.csproj` 而构建失败。
+## 解析核心与更新
 
-### 2. 环境
+项目使用 [kagenocookie/RE-Engine-Lib](https://github.com/kagenocookie/RE-Engine-Lib) 作为内置解析核心。它是源码子模块，不是用户可随意替换的 Noesis 插件。
 
-- **.NET 10 SDK**：本机装在 `~/.dotnet10`（REE-Lib 需要 C# 14 语法），
-  直接用绝对路径调用，无需全局安装：
-  ```bash
-  ~/.dotnet10/dotnet.exe build src/ReExtractor.Gui -c Debug
-  ```
+当卡普空发布新游戏或升级资源格式时，需要先合并解析核心更新，再完成本项目适配与样本回归，最后随 ReExtractor 新版本整体发布。不建议用户直接覆盖解析 DLL。
 
-### 3. 构建与运行 GUI
+## 第三方项目
 
-```bash
-# 构建
-~/.dotnet10/dotnet.exe build src/ReExtractor.Gui -c Debug
+- RE-Engine-Lib：MIT License。
+- Avalonia：MIT License。
+- Silk.NET：MIT License。
+- Blender：由用户独立安装，遵循 Blender 自身许可证。
 
-# 运行（调试）
-~/.dotnet10/dotnet.exe run --project src/ReExtractor.Gui
+详细信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-# 或直跑产物
-src/ReExtractor.Gui/bin/Debug/net10.0/ReExtractor.Gui.exe
-```
+## 免责声明
 
-### 4. CLI（解包/验证）
-
-```bash
-~/.dotnet10/dotnet.exe run --project src/ReExtractor.Cli -- \
-  --game-dir "E:\Steam\steamapps\common\OnimushaWotS_Demo" \
-  --list "D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list" stats
-```
-
-### 5. 版本控制约定
-
-- **只跟踪源码**：`src/`、`tools/`、`README.md`、`ReExtractor.sln` 及根目录配置（`.gitignore`/`.gitattributes`/`.gitmodules`）。
-- **不跟踪**：`bin/`、`obj/`、NuGet 缓存、`.workbuddy/`（WorkBuddy 本地状态）、`output/`（解包提取资产）、`*.log` 与调试截图——均由 `.gitignore` 排除。
-- 换行符策略见 `.gitattributes`（源码 CRLF / 脚本 LF）。
-
-## CLI 用法
-
-```
-dotnet run --project src/ReExtractor.Cli -- --game-dir "E:\Steam\steamapps\common\OnimushaWotS_Demo" \
-  --list "D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list" stats
-```
+本项目与 CAPCOM 及其关联公司无关。游戏名称、商标和资源归各自权利人所有。请仅处理你合法拥有的游戏文件，并遵守所在地区法律与游戏服务条款。

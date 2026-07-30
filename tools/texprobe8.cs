@@ -43,11 +43,12 @@ var intensity = new float[vm.VertexCount];
 for (var i = 0; i < vm.VertexCount; i++)
     intensity[i] = 0.25f + 0.75f * MathF.Abs(Vector3.Dot(vm.Normals[i], lightDir));
 
-Render("S_streaming_mip0", trilinear: false);
-Render("T_streaming_trilinear", trilinear: true);
+Render("S_streaming_mip0", trilinear: false, perspectiveUv: false);
+Render("T_streaming_trilinear", trilinear: true, perspectiveUv: false);
+Render("P_perspective_uv_trilinear", trilinear: true, perspectiveUv: true);
 Console.WriteLine("DONE");
 
-void Render(string tag, bool trilinear)
+void Render(string tag, bool trilinear, bool perspectiveUv)
 {
     var color = new uint[W * H];
     var depth = new float[W * H];
@@ -55,12 +56,13 @@ void Render(string tag, bool trilinear)
     Array.Fill(depth, float.MaxValue);
 
     var vc = vm.VertexCount;
-    var sx = new float[vc]; var sy = new float[vc]; var sz = new float[vc];
+    var sx = new float[vc]; var sy = new float[vc]; var sz = new float[vc]; var invClipW = new float[vc];
     for (var i = 0; i < vc; i++)
     {
         var c = Vector4.Transform(new Vector4(vm.Vertices[i], 1f), vp);
         if (c.W <= 1e-6f) { sz[i] = float.NaN; continue; }
         var inv = 1f / c.W;
+        invClipW[i] = inv;
         sx[i] = (c.X * inv * 0.5f + 0.5f) * W;
         sy[i] = (0.5f - c.Y * inv * 0.5f) * H;
         sz[i] = c.Z * inv;
@@ -74,9 +76,9 @@ void Render(string tag, bool trilinear)
         if (float.IsNaN(za) || float.IsNaN(zb) || float.IsNaN(zc)) continue;
         var slot = faceTex[f];
         var tex = slot >= 0 && slot < textures.Length ? textures[slot] : null;
-        RasterTri(color, depth, sx[a], sy[a], za, intensity[a], uvs[a],
-            sx[b], sy[b], zb, intensity[b], uvs[b],
-            sx[c2], sy[c2], zc, intensity[c2], uvs[c2], tex, trilinear);
+        RasterTri(color, depth, sx[a], sy[a], za, invClipW[a], intensity[a], uvs[a],
+            sx[b], sy[b], zb, invClipW[b], intensity[b], uvs[b],
+            sx[c2], sy[c2], zc, invClipW[c2], intensity[c2], uvs[c2], tex, trilinear, perspectiveUv);
     }
 
     var img = new Image<Rgba32>(W, H);
@@ -98,10 +100,10 @@ void Render(string tag, bool trilinear)
 }
 
 void RasterTri(uint[] pixels, float[] depth,
-    float x0, float y0, float z0, float i0, Vector2 uv0,
-    float x1, float y1, float z1, float i1, Vector2 uv1,
-    float x2, float y2, float z2, float i2, Vector2 uv2,
-    ViewportTexture? tex, bool trilinear)
+    float x0, float y0, float z0, float iw0, float i0, Vector2 uv0,
+    float x1, float y1, float z1, float iw1, float i1, Vector2 uv1,
+    float x2, float y2, float z2, float iw2, float i2, Vector2 uv2,
+    ViewportTexture? tex, bool trilinear, bool perspectiveUv)
 {
     var yMin = MathF.Min(y0, MathF.Min(y1, y2));
     var yMax = MathF.Max(y0, MathF.Max(y1, y2));
@@ -159,8 +161,19 @@ void RasterTri(uint[] pixels, float[] depth,
             uint color;
             if (tp != null)
             {
-                var u = w0 * uv0.X + w1 * uv1.X + w2 * uv2.X;
-                var v = w0 * uv0.Y + w1 * uv1.Y + w2 * uv2.Y;
+                float u, v;
+                if (perspectiveUv)
+                {
+                    var pw0 = w0 * iw0; var pw1 = w1 * iw1; var pw2 = w2 * iw2;
+                    var invPw = 1f / (pw0 + pw1 + pw2);
+                    u = (pw0 * uv0.X + pw1 * uv1.X + pw2 * uv2.X) * invPw;
+                    v = (pw0 * uv0.Y + pw1 * uv1.Y + pw2 * uv2.Y) * invPw;
+                }
+                else
+                {
+                    u = w0 * uv0.X + w1 * uv1.X + w2 * uv2.X;
+                    v = w0 * uv0.Y + w1 * uv1.Y + w2 * uv2.Y;
+                }
                 uint texel;
                 if (mips != null && mipW != null && mipH != null)
                 {

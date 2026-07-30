@@ -18,6 +18,14 @@ public sealed class ViewportMesh
     public required Vector2[] Uvs;                   // TEXCOORD_0
     public required (int A, int B, int C)[] Faces;
     public required int[] FaceTexture;               // per-face index into Textures (-1 = untextured)
+    /// <summary>Faces using RE-only transparent eye shaders that must not become opaque white in FBX.</summary>
+    public bool[] FaceExportHidden = [];
+    /// <summary>True only for materials authored as alpha-cutout surfaces (for example *_ALP_*).</summary>
+    public bool[] FaceAlphaCutout = [];
+    /// <summary>Per-face key into <see cref="Groups"/>. Empty for synthetic/legacy meshes.</summary>
+    public int[] FaceGroups = [];
+    /// <summary>All VISCON groups in the source LOD, including default-hidden alternatives/helpers.</summary>
+    public ViewportGroup[] Groups = [];
     public required ViewportTexture[] Textures;
     public required (int Joint, float Weight)[][] Weights; // per-vertex; joints index into DeformBones
     public required ViewportBone[] Bones;            // full bone list
@@ -26,6 +34,212 @@ public sealed class ViewportMesh
     public int FaceCount => Faces.Length;
     /// <summary>viscon group filter summary, e.g. "viscon 7/11（隐藏 9,10,131,250）".</summary>
     public string VisconInfo = "";
+
+    /// <summary>
+    /// Merge multiple meshes into ONE unified mesh (geometry + skeleton + textures).
+    /// Bones are unified by NAME: parts sharing a skeleton (e.g. one character's
+    /// body/hair/weapon .mesh files) collapse onto a single skeleton; bones unique to a
+    /// source are appended. Per-vertex skin weights and the DeformToBone array are remapped
+    /// through the per-source bone map so the merged result skins correctly as a single unit.
+    /// Vertex positions are concatenated as-is (each source is already in its own bind space),
+    /// which is correct for parts of one character and acceptable for overlaying distinct characters.
+    /// </summary>
+    public static ViewportMesh Merge(IReadOnlyList<ViewportMesh> meshes)
+    {
+        if (meshes == null || meshes.Count == 0)
+            throw new ArgumentException("need at least one mesh", nameof(meshes));
+        if (meshes.Count == 1) return meshes[0];
+
+        var verts = new List<Vector3>();
+        var normals = new List<Vector3>();
+        var uvs = new List<Vector2>();
+        var faces = new List<(int, int, int)>();
+        var faceTex = new List<int>();
+        var faceAlphaCutout = new List<bool>();
+        var faceExportHidden = new List<bool>();
+        var faceGroups = new List<int>();
+        var weights = new List<(int, float)[]>();
+        var textures = new List<ViewportTexture>();
+        var texByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        // --- unify skeleton by bone name ---
+        var bones = new List<ViewportBone>();
+        var boneSources = new List<(int Mesh, int Bone)>();
+        var boneNameToIdx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var perMeshBoneMap = new List<int[]>(); // [m][srcBoneIdx] -> unified bone idx
+        var perMeshGroupMap = new List<Dictionary<int, int>>();
+        var groups = new List<ViewportGroup>();
+        var nextGroupKey = 0;
+        for (var m = 0; m < meshes.Count; m++)
+        {
+            var mb = meshes[m].Bones;
+            var map = new int[mb.Length];
+            for (var b = 0; b < mb.Length; b++)
+            {
+                var name = mb[b].Name;
+                if (!boneNameToIdx.TryGetValue(name, out var ui))
+                {
+                    ui = bones.Count;
+                    boneNameToIdx[name] = ui;
+                    bones.Add(mb[b]);
+                    boneSources.Add((m, b));
+                }
+                map[b] = ui;
+            }
+            perMeshBoneMap.Add(map);
+
+            var groupMap = new Dictionary<int, int>();
+            foreach (var group in meshes[m].Groups)
+            {
+                var key = nextGroupKey++;
+                groupMap[group.Key] = key;
+                groups.Add(new ViewportGroup
+                {
+                    Key = key,
+                    Id = group.Id,
+                    Name = meshes.Count > 1 ? $"{m + 1}: {group.Name}" : group.Name,
+                    Materials = group.Materials,
+                    FaceCount = group.FaceCount,
+                    DefaultVisible = group.DefaultVisible,
+                    IsHelper = group.IsHelper,
+                });
+            }
+            perMeshGroupMap.Add(groupMap);
+        }
+
+        // ParentIndex belongs to each source skeleton and cannot be copied verbatim into
+        // the union skeleton. Remap it through the same per-source bone map used by skin
+        // weights; otherwise unique cloth/hair/head bones may point at unrelated union bones
+        // and explode as soon as UE evaluates the bind pose or an animation.
+        for (var unifiedIndex = 0; unifiedIndex < bones.Count; unifiedIndex++)
+        {
+            var (sourceMesh, sourceBone) = boneSources[unifiedIndex];
+            var source = meshes[sourceMesh].Bones[sourceBone];
+            var parent = source.ParentIndex;
+            var remappedParent = parent >= 0 && parent < perMeshBoneMap[sourceMesh].Length
+                ? perMeshBoneMap[sourceMesh][parent]
+                : -1;
+            bones[unifiedIndex] = new ViewportBone
+            {
+                Name = source.Name,
+                ParentIndex = remappedParent == unifiedIndex ? -1 : remappedParent,
+                LocalBind = source.LocalBind,
+                InverseGlobalBind = source.InverseGlobalBind,
+            };
+        }
+
+        // --- merge geometry + textures + weights + deform map ---
+        var deformToBone = new List<int>();
+        var deformJointByBone = new Dictionary<int, int>();
+        for (var m = 0; m < meshes.Count; m++)
+        {
+            var mm = meshes[m];
+            var map = perMeshBoneMap[m];
+            var vBase = verts.Count;
+            verts.AddRange(mm.Vertices);
+            normals.AddRange(mm.Normals);
+            uvs.AddRange(mm.Uvs);
+
+            // Weights[].Joint is a DEFORM JOINT index (into DeformToBone), NOT a bone index.
+            // Merge deform joints by their unified bone index. Duplicating the same bone in the
+            // glTF skin joint list is legal-looking but fragile in Blender/UE, and can make
+            // merged parts skin against subtly different joint slots.
+            var sourceDeformToMerged = new int[mm.DeformToBone.Length];
+            for (var j = 0; j < mm.DeformToBone.Length; j++)
+            {
+                var sourceBone = mm.DeformToBone[j];
+                if (sourceBone < 0 || sourceBone >= map.Length)
+                {
+                    sourceDeformToMerged[j] = 0;
+                    continue;
+                }
+
+                var unifiedBone = map[sourceBone];
+                if (!deformJointByBone.TryGetValue(unifiedBone, out var mergedJoint))
+                {
+                    mergedJoint = deformToBone.Count;
+                    deformJointByBone[unifiedBone] = mergedJoint;
+                    deformToBone.Add(unifiedBone);
+                }
+                sourceDeformToMerged[j] = mergedJoint;
+            }
+
+            foreach (var w in mm.Weights)
+            {
+                var remapped = new (int, float)[w.Length];
+                for (var k = 0; k < w.Length; k++)
+                {
+                    var sourceJoint = w[k].Item1;
+                    var mergedJoint = sourceJoint >= 0 && sourceJoint < sourceDeformToMerged.Length
+                        ? sourceDeformToMerged[sourceJoint]
+                        : 0;
+                    remapped[k] = (mergedJoint, w[k].Item2);
+                }
+                weights.Add(remapped);
+            }
+
+            foreach (var (a, b, c) in mm.Faces)
+                faces.Add((a + vBase, b + vBase, c + vBase));
+
+            // textures: dedupe by name, remap per-face texture slots
+            var localTexToGlobal = new int[mm.Textures.Length];
+            for (var t = 0; t < mm.Textures.Length; t++)
+            {
+                var tex = mm.Textures[t];
+                if (!texByName.TryGetValue(tex.Name, out var gslot))
+                {
+                    gslot = textures.Count;
+                    texByName[tex.Name] = gslot;
+                    textures.Add(tex);
+                }
+                localTexToGlobal[t] = gslot;
+            }
+            foreach (var slot in mm.FaceTexture)
+                faceTex.Add(slot >= 0 && slot < localTexToGlobal.Length ? localTexToGlobal[slot] : -1);
+            for (var f = 0; f < mm.Faces.Length; f++)
+                faceAlphaCutout.Add(f < mm.FaceAlphaCutout.Length && mm.FaceAlphaCutout[f]);
+            for (var f = 0; f < mm.Faces.Length; f++)
+                faceExportHidden.Add(f < mm.FaceExportHidden.Length && mm.FaceExportHidden[f]);
+            var groupMap = perMeshGroupMap[m];
+            for (var f = 0; f < mm.Faces.Length; f++)
+            {
+                var sourceKey = f < mm.FaceGroups.Length ? mm.FaceGroups[f] : -1;
+                faceGroups.Add(groupMap.TryGetValue(sourceKey, out var mergedKey) ? mergedKey : -1);
+            }
+        }
+
+        return new ViewportMesh
+        {
+            Vertices = verts.ToArray(),
+            Normals = normals.ToArray(),
+            Uvs = uvs.ToArray(),
+            Faces = faces.ToArray(),
+            FaceTexture = faceTex.ToArray(),
+            FaceAlphaCutout = faceAlphaCutout.ToArray(),
+            FaceExportHidden = faceExportHidden.ToArray(),
+            FaceGroups = faceGroups.ToArray(),
+            Groups = groups.ToArray(),
+            Textures = textures.ToArray(),
+            Weights = weights.ToArray(),
+            Bones = bones.ToArray(),
+            DeformToBone = deformToBone.ToArray(),
+            VisconInfo = $"merged {meshes.Count} meshes",
+        };
+    }
+}
+
+/// <summary>One source VISCON visibility group exposed to the interactive viewport.</summary>
+public sealed class ViewportGroup
+{
+    /// <summary>Unique key inside this ViewportMesh (Id may repeat after mesh merge).</summary>
+    public required int Key;
+    /// <summary>Original RE Engine groupId.</summary>
+    public required int Id;
+    public required string Name;
+    public required string[] Materials;
+    public required int FaceCount;
+    public bool DefaultVisible;
+    public bool IsHelper;
 }
 
 /// <summary>Decoded RGBA texture for software sampling (top-left origin, row-major).</summary>
@@ -55,6 +269,8 @@ public sealed class AnimationClip
     public required string Name;
     public required float Duration;
     public required Dictionary<int, BoneTrack> Tracks; // bone index -> track
+    /// <summary>Tracks keyed by target skeleton bone name, used to animate every merged/overlaid model.</summary>
+    public Dictionary<string, BoneTrack> NamedTracks = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class BoneTrack
@@ -65,9 +281,14 @@ public sealed class BoneTrack
     public Quaternion[]? Rotations;
 }
 
+/// <summary>One embedded, directly readable motion in a MotionList.</summary>
+public sealed record MotionInfo(int SourceIndex, string DisplayName, int MotionNumber);
+
 /// <summary>Loads ViewportMesh / AnimationClip from RE files (parse only, no rendering deps).</summary>
 public static class ViewportDataLoader
 {
+    private sealed record PreviewMaterial(ViewportTexture Texture, bool AlphaCutout);
+
     public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null)
     {
         using var mesh = MeshService.LoadMesh(meshStream, nativePath);
@@ -76,7 +297,7 @@ public static class ViewportDataLoader
 
         // resolve material textures via the model's .mdf2 (best effort)
         var materialTextures = openResource == null
-            ? new Dictionary<int, ViewportTexture>()
+            ? new Dictionary<int, PreviewMaterial>()
             : ResolveMaterialTextures(mesh, nativePath, openResource);
 
         var verts = new List<Vector3>();
@@ -84,49 +305,91 @@ public static class ViewportDataLoader
         var uvs = new List<Vector2>();
         var faces = new List<(int, int, int)>();
         var faceTex = new List<int>();
+        var faceAlphaCutout = new List<bool>();
+        var faceExportHidden = new List<bool>();
+        var faceGroups = new List<int>();
         var weights = new List<(int, float)[]>();
         var textureList = new List<ViewportTexture>();
         var textureIndex = new Dictionary<string, int>(); // material name -> texture slot
 
-        // --- viscon alternate-state filter (bit-exact duplicate detection, probe9-verified) ---
-        // The mesh ships alternate-state shells (e.g. jacket variants 9/10) that are
-        // bit-exact coplanar duplicates of each other; rendering both z-fights. Noesis
-        // imports ALL groups and lets the user toggle — for a single-view preview we keep
-        // the first group of each duplicate set and drop a group only when >50% of its
-        // faces are bit-exact duplicates of already-kept groups. Everything else is kept
-        // (group 250 = the body, 130/131 = footwear — all distinct geometry).
+        // --- default VISCON state ---------------------------------------------------------
+        // Mesh groups are visibility alternatives, not layers that may all be flattened into
+        // one render.  A common character layout is:
+        //   primary groups introduce Body/Hand/Cloth/... materials;
+        //   later groups reuse one of those materials for an alternate/damage/proxy shell.
+        // Drawing every group lets the later shell cover the real multi-material character
+        // (ch001 group 250 reuses Cloth_Top over the whole body, turning skin red/grey).
+        //
+        // Build a deterministic default state from geometry, not just material reuse. VISCON
+        // groups frequently split one material across several real body/garment pieces (ch001
+        // group 9 is the missing left-abdomen piece), so "material already seen" is not enough
+        // to call a group an alternative. Hide a later group only when its same-material bounds
+        // and vertex counts closely match geometry already retained. IDs 250+ are reserved by
+        // these assets for broad override/proxy states and remain opt-in in the inspector.
         var allGroups = lod.MeshGroups.OrderBy(g => g.groupId).ToList();
-        var keptFaceKeys = new HashSet<ulong>();
+        // VFX emitter/helper shells are authoring-time/runtime support geometry, not part of
+        // the visible model surface. They often envelop the entire garment and use NullGray;
+        // flattening them into the preview makes the real albedo look missing or corrupted.
+        // Keep the source mesh/export untouched and exclude only from the interactive preview.
+        var helperGroups = allGroups.Where(g => g.Submeshes.Count > 0 &&
+            g.Submeshes.All(s => s.materialIndex < mesh.MaterialNames.Count &&
+                IsPreviewHelperMaterial(mesh.MaterialNames[s.materialIndex])))
+            .ToList();
+        var visualGroups = allGroups.Except(helperGroups).ToList();
+        var modelDiagonal = GetGroupsBoundsDiagonal(visualGroups);
+        var representedMaterials = new HashSet<ushort>();
         var keptGroups = new List<MeshGroup>();
-        var droppedGroups = new List<int>();
-        foreach (var g in allGroups)
+        var alternateGroups = new List<int>();
+        foreach (var g in visualGroups)
         {
-            var keys = new List<ulong>();
-            foreach (var sub in g.Submeshes)
+            var materials = g.Submeshes
+                .Where(s => s.indicesCount >= 3 && s.materialIndex >= 0)
+                .Select(s => s.materialIndex)
+                .Distinct()
+                .ToArray();
+            var isReservedOverride = g.groupId >= 250 && visualGroups.Count > 1;
+            var isGeometryDuplicate = keptGroups.Count > 0 && materials.Length > 0 &&
+                materials.All(representedMaterials.Contains) &&
+                IsNearDuplicateGroup(g, keptGroups, modelDiagonal);
+            if (isReservedOverride || isGeometryDuplicate)
             {
-                var pos = sub.Positions;
-                for (var i = 0; i + 2 < sub.indicesCount; i += 3)
-                {
-                    int i0 = GetIndex(sub, i), i1 = GetIndex(sub, i + 1), i2 = GetIndex(sub, i + 2);
-                    if ((uint)i0 >= (uint)pos.Length || (uint)i1 >= (uint)pos.Length || (uint)i2 >= (uint)pos.Length) continue;
-                    keys.Add(FaceKey(pos[i0], pos[i1], pos[i2]));
-                }
-            }
-            var dupCount = keys.Count(k => keptFaceKeys.Contains(k));
-            if (keptGroups.Count > 0 && keys.Count > 0 && dupCount * 2 > keys.Count)
-            {
-                droppedGroups.Add(g.groupId); // >50% bit-exact duplicate of already-kept groups
+                alternateGroups.Add(g.groupId);
                 continue;
             }
             keptGroups.Add(g);
-            foreach (var k in keys) keptFaceKeys.Add(k);
+            foreach (var material in materials) representedMaterials.Add(material);
         }
-        var droppedDesc = string.Join(",", droppedGroups);
-        var visconInfo = droppedDesc.Length > 0
-            ? $"viscon {keptGroups.Count}/{allGroups.Count}（隐藏组 {droppedDesc}）"
-            : $"viscon {keptGroups.Count}/{allGroups.Count}";
+        var hiddenParts = new List<string>();
+        if (alternateGroups.Count > 0) hiddenParts.Add($"替代组 {string.Join(",", alternateGroups)}");
+        if (helperGroups.Count > 0) hiddenParts.Add($"辅助组 {string.Join(",", helperGroups.Select(g => g.groupId))}");
+        var visconInfo = $"viscon {keptGroups.Count}/{allGroups.Count}" +
+            (hiddenParts.Count > 0 ? $"（隐藏{string.Join("；", hiddenParts)}）" : "");
 
-        foreach (var group in keptGroups)
+        var keptGroupIds = keptGroups.Select(g => (int)g.groupId).ToHashSet();
+        var helperGroupIds = helperGroups.Select(g => (int)g.groupId).ToHashSet();
+        var viewportGroups = allGroups.Select(g =>
+        {
+            var materials = g.Submeshes
+                .Where(s => s.indicesCount >= 3 && s.materialIndex < mesh.MaterialNames.Count)
+                .Select(s => mesh.MaterialNames[s.materialIndex])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return new ViewportGroup
+            {
+                Key = g.groupId,
+                Id = g.groupId,
+                Name = $"组 {g.groupId}",
+                Materials = materials,
+                FaceCount = g.Submeshes.Sum(s => s.indicesCount / 3),
+                DefaultVisible = keptGroupIds.Contains(g.groupId),
+                IsHelper = helperGroupIds.Contains(g.groupId),
+            };
+        }).ToArray();
+
+        // Preserve every source group in the viewport mesh. Rendering starts with the safe
+        // default set above, while the GUI can toggle alternatives instantly without
+        // reparsing the mesh or decoding textures again.
+        foreach (var group in allGroups)
         {
             foreach (var sub in group.Submeshes)
             {
@@ -149,15 +412,23 @@ public static class ViewportDataLoader
                 }
 
                 var texSlot = -1;
+                var alphaCutout = false;
+                var exportHidden = false;
                 if (sub.materialIndex < mesh.MaterialNames.Count)
                 {
                     var matName = mesh.MaterialNames[sub.materialIndex];
-                    if (materialTextures.TryGetValue(sub.materialIndex, out var vt))
+                    // RE renders these with dedicated transparent/refraction shaders. FBX
+                    // cannot reproduce them faithfully; without a color material they otherwise
+                    // become an opaque white shell that hides the real eyeball in UE.
+                    exportHidden = IsUnsupportedEyeOverlayMaterial(matName) &&
+                        !materialTextures.ContainsKey(sub.materialIndex);
+                    if (materialTextures.TryGetValue(sub.materialIndex, out var previewMaterial))
                     {
+                        alphaCutout = previewMaterial.AlphaCutout;
                         if (!textureIndex.TryGetValue(matName, out texSlot))
                         {
                             texSlot = textureList.Count;
-                            textureList.Add(vt);
+                            textureList.Add(previewMaterial.Texture);
                             textureIndex[matName] = texSlot;
                         }
                     }
@@ -170,6 +441,9 @@ public static class ViewportDataLoader
                         continue;
                     faces.Add((vBase + i0, vBase + i1, vBase + i2));
                     faceTex.Add(texSlot);
+                    faceAlphaCutout.Add(alphaCutout);
+                    faceExportHidden.Add(exportHidden);
+                    faceGroups.Add(group.groupId);
                 }
             }
         }
@@ -182,6 +456,10 @@ public static class ViewportDataLoader
             Uvs = uvs.ToArray(),
             Faces = faces.ToArray(),
             FaceTexture = faceTex.ToArray(),
+            FaceAlphaCutout = faceAlphaCutout.ToArray(),
+            FaceExportHidden = faceExportHidden.ToArray(),
+            FaceGroups = faceGroups.ToArray(),
+            Groups = viewportGroups,
             Textures = textureList.ToArray(),
             Weights = weights.ToArray(),
             Bones = bones,
@@ -194,10 +472,10 @@ public static class ViewportDataLoader
     /// Parse the sibling .mdf2 of the mesh and decode each material's albedo texture.
     /// Returns materialIndex -> decoded texture (best effort; missing pieces are skipped).
     /// </summary>
-    private static Dictionary<int, ViewportTexture> ResolveMaterialTextures(
+    private static Dictionary<int, PreviewMaterial> ResolveMaterialTextures(
         MeshFile mesh, string meshPath, Func<string, Stream?> openResource)
     {
-        var result = new Dictionary<int, ViewportTexture>();
+        var result = new Dictionary<int, PreviewMaterial>();
 
         // mesh path: .../ch001_00_00.mesh.251215606 -> .../ch001_00_00.mdf2.50
         var dotMesh = meshPath.IndexOf(".mesh.", StringComparison.OrdinalIgnoreCase);
@@ -226,21 +504,155 @@ public static class ViewportDataLoader
             var meshMatIndex = nameToIndex.TryGetValue(mat.Name, out var idx) ? idx : (m < mesh.MaterialNames.Count ? m : -1);
             if (meshMatIndex < 0 || result.ContainsKey(meshMatIndex)) continue;
 
-            // albedo slot priority: BaseDielectricMap > texType*ALBD > path*_albd
+            // Albedo slot priority: the material's authored base-color channel first.
+            // Do not treat wrinkle/expression/VFX ALBD maps as a base texture. Skin shaders
+            // blend several of those maps at runtime; projecting one over the whole head
+            // produces the characteristic repeated-face corruption seen on ch001_00_10.
             var albedo = mat.Textures.FirstOrDefault(t => t.texType.Equals("BaseDielectricMap", StringComparison.OrdinalIgnoreCase))
-                ?? mat.Textures.FirstOrDefault(t => t.texType.Contains("ALBD", StringComparison.OrdinalIgnoreCase))
-                ?? mat.Textures.FirstOrDefault(t => t.texPath.Contains("_albd", StringComparison.OrdinalIgnoreCase));
-            if (albedo == null || string.IsNullOrEmpty(albedo.texPath)) continue;
+                ?? mat.Textures.FirstOrDefault(t => IsBaseColorSlot(t.texType, t.texPath));
+            var atlasQuadrant = false;
+            string? albedoPath = albedo?.texPath;
+            if (string.IsNullOrEmpty(albedoPath) && mat.Name.Contains("skin", StringComparison.OrdinalIgnoreCase))
+            {
+                var wrinkle = mat.Textures.FirstOrDefault(t =>
+                    t.texType.Equals("Wrinkle_ALBMap01", StringComparison.OrdinalIgnoreCase));
+                if (wrinkle != null && !string.IsNullOrEmpty(wrinkle.texPath))
+                {
+                    // OWOTS head skin stores four complete expression variants in one 2x2 atlas.
+                    // The neutral companion is not exposed as a regular MDF texture slot; derive
+                    // it from the wrinkle map name and crop the default (top-left) quadrant.
+                    albedoPath = wrinkle.texPath
+                        .Replace("_skin_FW_01_ALBD.tex", "_skin_neutral_FW_01_ALB.tex", StringComparison.OrdinalIgnoreCase);
+                    atlasQuadrant = !albedoPath.Equals(wrinkle.texPath, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            if (string.IsNullOrEmpty(albedoPath)) continue;
 
-            using var texStream = OpenNormalized(openResource, albedo.texPath);
+            using var texStream = OpenNormalized(openResource, albedoPath);
             if (texStream == null) continue;
             try
             {
-                result[meshMatIndex] = DecodeTexture(texStream, albedo.texPath);
+                var flags = mat.Header.Flags;
+                var alphaCutout = (flags & (MaterialFlags.BaseAlphaTestEnable |
+                    MaterialFlags.ForcedAlphaTestEnable | MaterialFlags.AlphaTestEnable)) != 0;
+                // Some older assets expose the convention only through their material name.
+                // Keep that as a compatibility fallback, but prefer the MDF's authoritative flags.
+                alphaCutout |= mat.Name.Contains("ALP", StringComparison.OrdinalIgnoreCase);
+
+                var texture = DecodeTexture(texStream, albedoPath, atlasQuadrant);
+                var baseColor = mat.Parameters.FirstOrDefault(parameter =>
+                    parameter.paramName.Equals("BaseColor", StringComparison.OrdinalIgnoreCase))?.parameter ?? Vector4.One;
+                ApplyBaseColor(texture, baseColor);
+                var eyeColor = mat.Parameters.FirstOrDefault(parameter =>
+                    parameter.paramName.Equals("Eye_ColorChange", StringComparison.OrdinalIgnoreCase))?.parameter;
+                if (eyeColor.HasValue) ApplyEyeColorChange(texture, eyeColor.Value);
+                // Material color parameters can differ even when multiple materials reuse the
+                // same source ALBD image. Keep those baked variants distinct during scene merge.
+                texture.Name = $"{mat.Name}_{Path.GetFileName(albedoPath)}";
+
+                // RE hair cards commonly store coverage in a separate AlphaMap. Folding that
+                // mask into the exported/preview RGBA texture prevents eyebrow and beard cards
+                // from appearing as solid white or grey polygons.
+                var alphaHeader = mat.Textures.FirstOrDefault(candidate =>
+                    candidate.texType.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) &&
+                    !IsNullTexture(candidate.texPath));
+                if (alphaHeader != null)
+                {
+                    using var alphaStream = OpenNormalized(openResource, alphaHeader.texPath);
+                    if (alphaStream != null)
+                    {
+                        var alphaAdjust = mat.Parameters.FirstOrDefault(parameter =>
+                            parameter.paramName.Equals("AlphaAdjust", StringComparison.OrdinalIgnoreCase))?.parameter.X ?? 1f;
+                        ApplyAlphaMap(texture, alphaStream, alphaHeader.texPath, alphaAdjust);
+                        alphaCutout = true;
+                    }
+                }
+                result[meshMatIndex] = new PreviewMaterial(texture, alphaCutout);
             }
             catch { /* skip undecodable textures */ }
         }
         return result;
+    }
+
+    private static bool IsNullTexture(string path)
+        => path.Contains("NullWhite", StringComparison.OrdinalIgnoreCase)
+           || path.Contains("NullBlack", StringComparison.OrdinalIgnoreCase)
+           || path.Contains("NullTexture", StringComparison.OrdinalIgnoreCase);
+
+    private static void ApplyBaseColor(ViewportTexture texture, Vector4 color)
+    {
+        var red = Math.Clamp(color.X, 0f, 1f);
+        var green = Math.Clamp(color.Y, 0f, 1f);
+        var blue = Math.Clamp(color.Z, 0f, 1f);
+        for (var i = 0; i < texture.Pixels.Length; i++)
+        {
+            var pixel = texture.Pixels[i];
+            var r = (uint)Math.Clamp((int)MathF.Round(((pixel >> 16) & 0xFF) * red), 0, 255);
+            var g = (uint)Math.Clamp((int)MathF.Round(((pixel >> 8) & 0xFF) * green), 0, 255);
+            var b = (uint)Math.Clamp((int)MathF.Round((pixel & 0xFF) * blue), 0, 255);
+            texture.Pixels[i] = (pixel & 0xFF000000) | (r << 16) | (g << 8) | b;
+        }
+        BuildMipChain(texture);
+    }
+
+    private static void ApplyEyeColorChange(ViewportTexture texture, Vector4 eyeColor)
+    {
+        var tintR = Math.Clamp(eyeColor.X, 0f, 1f);
+        var tintG = Math.Clamp(eyeColor.Y, 0f, 1f);
+        var tintB = Math.Clamp(eyeColor.Z, 0f, 1f);
+        for (var i = 0; i < texture.Pixels.Length; i++)
+        {
+            var pixel = texture.Pixels[i];
+            // The eyeball ALBD alpha is an iris mask, not surface transparency.
+            var iris = 1f - ((pixel >> 24) & 0xFF) / 255f;
+            if (iris <= 0f) continue;
+            var rScale = 1f + (tintR - 1f) * iris;
+            var gScale = 1f + (tintG - 1f) * iris;
+            var bScale = 1f + (tintB - 1f) * iris;
+            var r = (uint)Math.Clamp((int)MathF.Round(((pixel >> 16) & 0xFF) * rScale), 0, 255);
+            var g = (uint)Math.Clamp((int)MathF.Round(((pixel >> 8) & 0xFF) * gScale), 0, 255);
+            var b = (uint)Math.Clamp((int)MathF.Round((pixel & 0xFF) * bScale), 0, 255);
+            texture.Pixels[i] = (pixel & 0xFF000000) | (r << 16) | (g << 8) | b;
+        }
+        BuildMipChain(texture);
+    }
+    private static void ApplyAlphaMap(ViewportTexture texture, Stream alphaStream, string alphaPath, float adjust)
+    {
+        using var alpha = new TexService().DecodeToImage(alphaStream, alphaPath);
+        if (alpha.Width != texture.Width || alpha.Height != texture.Height)
+            alpha.Mutate(operation => operation.Resize(texture.Width, texture.Height));
+        adjust = Math.Clamp(adjust, 0.01f, 8f);
+        alpha.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < texture.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < texture.Width; x++)
+                {
+                    var source = row[x];
+                    var coverage = (uint)Math.Clamp((int)MathF.Round(source.R * adjust), 0, 255);
+                    var index = y * texture.Width + x;
+                    texture.Pixels[index] = (texture.Pixels[index] & 0x00FFFFFF) | (coverage << 24);
+                }
+            }
+        });
+        BuildMipChain(texture);
+    }
+    private static bool IsBaseColorSlot(string type, string path)
+    {
+        var derived = type.Contains("Wrinkle", StringComparison.OrdinalIgnoreCase) ||
+                      type.Contains("EyeAwake", StringComparison.OrdinalIgnoreCase) ||
+                      type.Contains("Gradient", StringComparison.OrdinalIgnoreCase) ||
+                      type.Contains("VFX", StringComparison.OrdinalIgnoreCase) ||
+                      path.Contains("_FW_", StringComparison.OrdinalIgnoreCase) ||
+                      path.Contains("_EAW_", StringComparison.OrdinalIgnoreCase) ||
+                      path.Contains("/VFX/", StringComparison.OrdinalIgnoreCase);
+        if (derived) return false;
+        return type.Equals("BaseColorMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("AlbedoMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseAlbedoMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseColor", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("ALBD", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
@@ -282,29 +694,13 @@ public static class ViewportDataLoader
 
     private const int MaxTextureSize = 2048;
 
-    private static ViewportTexture DecodeTexture(Stream texStream, string texPath)
+    private static ViewportTexture DecodeTexture(Stream texStream, string texPath, bool cropTopLeftQuadrant = false)
     {
         using var img = new TexService().DecodeToImage(texStream, texPath);
+        if (cropTopLeftQuadrant && img.Width >= 2 && img.Height >= 2)
+            img.Mutate(operation => operation.Crop(new Rectangle(0, 0, img.Width / 2, img.Height / 2)));
         var w = img.Width;
         var h = img.Height;
-
-        // DEBUG: dump first texture to disk so we can verify GUI-side decoding
-        var debugDir = @"D:\texdump\gui_debug";
-        if (!Directory.Exists(debugDir))
-            Directory.CreateDirectory(debugDir);
-        var safeName = Path.GetFileName(texPath).Replace('.', '_');
-        var debugPath = Path.Combine(debugDir, $"{safeName}.png");
-        if (!File.Exists(debugPath))
-        {
-            try { img.SaveAsPng(debugPath); } catch { /* ignore */ }
-            // Also dump raw pixel stats
-            var sample = new Rgba32[w * h];
-            img.CopyPixelDataTo(sample);
-            var sum = 0L;
-            for (var i = 0; i < Math.Min(100, sample.Length); i++)
-                sum += sample[i].R + sample[i].G + sample[i].B;
-            Console.WriteLine($"[TEX-DEBUG] {texPath} -> {debugPath}  size={w}x{h}  first100avg={sum / 100f / 3f:F1}  px[0]=({sample[0].R},{sample[0].G},{sample[0].B},{sample[0].A})");
-        }
 
         // downscale (nearest) to keep sampling fast
         if (w > MaxTextureSize || h > MaxTextureSize)
@@ -324,14 +720,15 @@ public static class ViewportDataLoader
                 for (var x = 0; x < w; x++)
                 {
                 var p = row[x];
-                // framebuffer is BGRA: uint = A<<24 | R<<16 | G<<8 | B
-                pixels[y * w + x] = 0xFF000000u | ((uint)p.R << 16) | ((uint)p.G << 8) | p.B;
+                // Keep the source alpha channel. The GPU only consumes it for materials
+                // explicitly marked ALP; ordinary skin/cloth albedo alpha may carry packed
+                // material data and must remain visually opaque.
+                pixels[y * w + x] = ((uint)p.A << 24) | ((uint)p.R << 16) | ((uint)p.G << 8) | p.B;
                 }
             }
         });
         var tex = new ViewportTexture { Width = w, Height = h, Pixels = pixels, Name = Path.GetFileName(texPath) };
         BuildMipChain(tex);
-        Console.WriteLine($"[TEX-DECODED] {texPath} -> {w}x{h}  px[0]=0x{pixels[0]:X8}  px[last]=0x{pixels[^1]:X8}");
         return tex;
     }
 
@@ -351,16 +748,17 @@ public static class ViewportDataLoader
             for (var y = 0; y < nh; y++)
             for (var x = 0; x < nw; x++)
             {
-                uint sb = 0, sg = 0, sr = 0, cnt = 0;
+                uint sb = 0, sg = 0, sr = 0, sa = 0, cnt = 0;
                 for (var dy = 0; dy < 2; dy++)
                 for (var dx = 0; dx < 2; dx++)
                 {
                     var sx = Math.Min(cw - 1, x * 2 + dx);
                     var sy = Math.Min(ch - 1, y * 2 + dy);
                     var p = cur[sy * cw + sx];
-                    sb += p & 0xFF; sg += (p >> 8) & 0xFF; sr += (p >> 16) & 0xFF; cnt++;
+                    sb += p & 0xFF; sg += (p >> 8) & 0xFF; sr += (p >> 16) & 0xFF;
+                    sa += (p >> 24) & 0xFF; cnt++;
                 }
-                next[y * nw + x] = 0xFF000000u | ((sr / cnt) << 16) | ((sg / cnt) << 8) | (sb / cnt);
+                next[y * nw + x] = ((sa / cnt) << 24) | ((sr / cnt) << 16) | ((sg / cnt) << 8) | (sb / cnt);
             }
             mips.Add(next); mws.Add(nw); mhs.Add(nh);
             cur = next; cw = nw; ch = nh;
@@ -373,8 +771,83 @@ public static class ViewportDataLoader
     private static Vector3 SafeNormal(Vector3 n)
         => n.LengthSquared() < 1e-6f ? Vector3.UnitZ : Vector3.Normalize(n);
 
+    private static bool IsPreviewHelperMaterial(string name)
+        => name.Contains("EffectEmitter", StringComparison.OrdinalIgnoreCase)
+           || name.Contains("VFXEmitter", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUnsupportedEyeOverlayMaterial(string name)
+        => name.Contains("cornea", StringComparison.OrdinalIgnoreCase)
+           || name.Contains("eye_shadow", StringComparison.OrdinalIgnoreCase)
+           || name.Contains("human_tear", StringComparison.OrdinalIgnoreCase);
+
+    private static float GetGroupsBoundsDiagonal(IEnumerable<MeshGroup> groups)
+    {
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        var found = false;
+        foreach (var position in groups.SelectMany(g => g.Submeshes).SelectMany(s => s.Positions.ToArray()))
+        {
+            min = Vector3.Min(min, position);
+            max = Vector3.Max(max, position);
+            found = true;
+        }
+        return found ? MathF.Max(1e-4f, Vector3.Distance(min, max)) : 1f;
+    }
+
+    private static bool IsNearDuplicateGroup(MeshGroup candidate, IReadOnlyList<MeshGroup> kept, float modelDiagonal)
+    {
+        var candidateParts = candidate.Submeshes
+            .Where(s => s.Positions.Length > 0)
+            .GroupBy(s => s.materialIndex)
+            .ToArray();
+        if (candidateParts.Length == 0) return false;
+
+        foreach (var part in candidateParts)
+        {
+            var candidateVertices = part.SelectMany(s => s.Positions.ToArray()).ToArray();
+            var duplicate = kept.Any(previous =>
+            {
+                var previousVertices = previous.Submeshes
+                    .Where(s => s.materialIndex == part.Key)
+                    .SelectMany(s => s.Positions.ToArray())
+                    .ToArray();
+                return GeometryBoundsMatch(candidateVertices, previousVertices, modelDiagonal);
+            });
+            if (!duplicate) return false;
+        }
+        return true;
+    }
+
+    private static bool GeometryBoundsMatch(Vector3[] a, Vector3[] b, float modelDiagonal)
+    {
+        if (a.Length == 0 || b.Length == 0) return false;
+        var countRatio = a.Length / (float)b.Length;
+        if (countRatio is < 0.85f or > 1.18f) return false;
+
+        static (Vector3 Center, Vector3 Size) Bounds(Vector3[] vertices)
+        {
+            var min = new Vector3(float.MaxValue);
+            var max = new Vector3(float.MinValue);
+            foreach (var position in vertices)
+            {
+                min = Vector3.Min(min, position);
+                max = Vector3.Max(max, position);
+            }
+            return ((min + max) * 0.5f, max - min);
+        }
+
+        var ba = Bounds(a);
+        var bb = Bounds(b);
+        return Vector3.Distance(ba.Center, bb.Center) <= modelDiagonal * 0.006f &&
+               Vector3.Distance(ba.Size, bb.Size) <= modelDiagonal * 0.012f;
+    }
+
     /// <summary>Lists all motions in a .motlist with readable labels (file base name + mot id).</summary>
     public static IReadOnlyList<string> ListMotionNames(Stream motlistStream, string motlistPath)
+        => ListMotions(motlistStream, motlistPath).Select(motion => motion.DisplayName).ToList();
+
+    /// <summary>Lists motions that contain embedded animation data, preserving their source indices.</summary>
+    public static IReadOnlyList<MotionInfo> ListMotions(Stream motlistStream, string motlistPath)
     {
         using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
         if (!motlist.Read())
@@ -382,7 +855,12 @@ public static class ViewportDataLoader
         var fileName = Path.GetFileName(motlistPath);
         var cut = fileName.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
         var baseName = cut > 0 ? fileName[..cut] : fileName;
-        return motlist.Motions.Select((m, i) => $"{baseName} #{i} (ID {m.motNumber})").ToList();
+        return motlist.Motions.Select((motion, index) => (motion, index))
+            .Where(item => item.motion.MotFile is MotFile)
+            .Select(item => new MotionInfo(item.index,
+                $"{baseName} #{item.index}（编号 {item.motion.motNumber}）",
+                item.motion.motNumber))
+            .ToList();
     }
 
     private static (int Joint, float Weight)[] ExtractWeights(VertexBoneWeights vw)
@@ -436,23 +914,40 @@ public static class ViewportDataLoader
             throw new NotSupportedException("Motion has no embedded .mot data");
 
         // map bone-name hash -> mesh bone index (case-sensitive MurMur3, as RE uses)
-        Dictionary<uint, int>? hashToBone = null;
+        Dictionary<uint, (int Index, string Name)>? hashToBone = null;
         if (meshBoneNames != null)
         {
-            hashToBone = new Dictionary<uint, int>(meshBoneNames.Count);
+            hashToBone = new Dictionary<uint, (int, string)>(meshBoneNames.Count);
             for (var i = 0; i < meshBoneNames.Count; i++)
-                hashToBone.TryAdd(MurMur3HashUtils.GetHash(meshBoneNames[i]), i);
+                hashToBone.TryAdd(MurMur3HashUtils.GetHash(meshBoneNames[i]), (i, meshBoneNames[i]));
         }
 
         var tracks = new Dictionary<int, BoneTrack>();
+        var namedTracks = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);
         var duration = 0f;
+        var targetBoneNames = meshBoneNames;
         foreach (var clip in mot.BoneClips)
         {
             int boneIndex = clip.ClipHeader.boneIndex;
+            string? boneName = null;
             if (hashToBone != null)
             {
-                if (!hashToBone.TryGetValue(clip.ClipHeader.boneHash, out boneIndex))
-                    continue; // helper/twist bone not present in the mesh skeleton -> skip track
+                if (hashToBone.TryGetValue(clip.ClipHeader.boneHash, out var target))
+                {
+                    boneIndex = target.Index;
+                    boneName = target.Name;
+                }
+                else
+                {
+                    var fallbackIndex = clip.ClipHeader.boneIndex;
+                    if (clip.ClipHeader.boneHash != 0 ||
+                        fallbackIndex < 0 ||
+                        targetBoneNames == null ||
+                        fallbackIndex >= targetBoneNames.Count)
+                        continue; // helper/twist bone not present in the mesh skeleton -> skip track
+                    boneIndex = fallbackIndex;
+                    boneName = targetBoneNames[fallbackIndex];
+                }
             }
             var track = new BoneTrack();
 
@@ -475,9 +970,14 @@ public static class ViewportDataLoader
             }
 
             tracks[boneIndex] = track;
+            if (boneName != null) namedTracks[boneName] = track;
         }
 
-        return new AnimationClip { Name = $"mot_{motion.motNumber}", Duration = duration, Tracks = tracks };
+        return new AnimationClip
+        {
+            Name = $"mot_{motion.motNumber}", Duration = duration,
+            Tracks = tracks, NamedTracks = namedTracks,
+        };
     }
 
     private static float[] BuildTimes(int[]? frames, int count, uint fps)

@@ -83,6 +83,20 @@ switch (command)
         Console.WriteLine($"[tex2png] -> {outPath}");
         return 0;
     }
+    case "texinfo":
+    {
+        var nativePath = positional.ElementAtOrDefault(1);
+        if (nativePath == null) { Console.WriteLine("texinfo requires a native path"); return 1; }
+        using var ms = pak.ReadFile(nativePath);
+        var texFile = new ReeLib.TexFile(new ReeLib.FileHandler(ms, nativePath));
+        if (!texFile.Read()) { Console.WriteLine("[texinfo] read failed"); return 1; }
+        var h = texFile.Header;
+        Console.WriteLine($"[texinfo] {h.width}x{h.height} format={h.format} ({(int)h.format}) mips={h.mipCount} images={h.imageCount} swizzleControl={h.swizzleControl} swizzleWidth={h.swizzleWidth} swizzleHeightDepth={h.swizzleHeightDepth}");
+        var service = new TexService();
+        var (_, diag) = service.DecodeToImageDiag(ms, nativePath);
+        Console.WriteLine($"[texinfo] branch={diag.Branch} stats={diag.PixelStats} notes={diag.Notes}");
+        return 0;
+    }
     case "mesh2glb":
     {
         var nativePath = positional.ElementAtOrDefault(1);
@@ -160,6 +174,54 @@ switch (command)
         }
         return 0;
     }
+    case "uvinfo":
+    {
+        var nativePath = positional.ElementAtOrDefault(1);
+        if (nativePath == null) { Console.WriteLine("uvinfo requires a mesh path"); return 1; }
+        using var ms = pak.ReadFile(nativePath);
+        using var mesh = new ReeLib.MeshFile(new ReeLib.FileHandler(ms, nativePath));
+        mesh.Read();
+        var lod = mesh.MeshData!.LODs[0];
+        foreach (var group in lod.MeshGroups)
+        foreach (var sub in group.Submeshes)
+        {
+            static string Range(Span<ReeLib.MplyMesh.HFloat2> uv)
+            {
+                if (uv.Length == 0) return "empty";
+                var values = uv.ToArray().Select(v => v.AsVector2).ToArray();
+                return $"({values.Min(v => v.X):G4},{values.Min(v => v.Y):G4})..({values.Max(v => v.X):G4},{values.Max(v => v.Y):G4})";
+            }
+            var name = sub.materialIndex < mesh.MaterialNames.Count ? mesh.MaterialNames[sub.materialIndex] : "?";
+            var uv1 = sub.Buffer.UV1.Length >= sub.vertsIndexOffset + sub.vertCount ? Range(sub.UV1) : "empty";
+            var uv2 = sub.Buffer.UV2.Length >= sub.vertsIndexOffset + sub.vertCount ? Range(sub.UV2) : "empty";
+            Console.WriteLine($"g{group.groupId} mat={sub.materialIndex} {name} vertices={sub.vertCount} UV0={Range(sub.UV0)} UV1={uv1} UV2={uv2}");
+        }
+        return 0;
+    }
+    case "animall2glb":
+    {
+        var meshPath = positional.ElementAtOrDefault(1);
+        var motlistPath = positional.ElementAtOrDefault(2);
+        var outDir = GetOpt("--out") ?? "output";
+        if (meshPath == null || motlistPath == null) { Console.WriteLine("animall2glb requires <mesh> <motlist>"); return 1; }
+        using var meshMs = pak.ReadFile(meshPath);
+        using var motMs = pak.ReadFile(motlistPath);
+        var outputs = new AnimationService().ConvertAllToGlbWithAnimation(
+            meshMs, meshPath, motMs, motlistPath, outDir);
+        Console.WriteLine($"[animall2glb] exported={outputs.Count} first={outputs.FirstOrDefault()} last={outputs.LastOrDefault()}");
+        return 0;
+    }
+    case "motembedded":
+    {
+        var motlistPath = positional.ElementAtOrDefault(1);
+        if (motlistPath == null) { Console.WriteLine("motembedded requires a motlist path"); return 1; }
+        using var motMs = pak.ReadFile(motlistPath);
+        var motions = ViewportDataLoader.ListMotions(motMs, motlistPath);
+        Console.WriteLine($"[motembedded] exportable={motions.Count}");
+        foreach (var motion in motions.Take(10))
+            Console.WriteLine($"  source={motion.SourceIndex} id={motion.MotionNumber} {motion.DisplayName}");
+        return 0;
+    }
     case "mdfinfo":
     {
         var mdfPath = positional.ElementAtOrDefault(1);
@@ -171,9 +233,11 @@ switch (command)
         Console.WriteLine($"[mdfinfo] read={ok} materials={mdf.Materials.Count}");
         foreach (var mat in mdf.Materials.Take(20))
         {
-            Console.WriteLine($"  mat '{mat.Name}' textures={mat.Textures.Count}");
-            foreach (var t in mat.Textures.Take(8))
+            Console.WriteLine($"  mat '{mat.Name}' textures={mat.Textures.Count} params={mat.Parameters.Count}");
+            foreach (var t in mat.Textures)
                 Console.WriteLine($"    [{t.texType}] {t.texPath}");
+            foreach (var p in mat.Parameters)
+                Console.WriteLine($"    param [{p.paramName}] components={p.componentCount} value=({p.parameter.X:G6}, {p.parameter.Y:G6}, {p.parameter.Z:G6}, {p.parameter.W:G6})");
         }
         if (meshPath != null)
         {
@@ -194,6 +258,20 @@ switch (command)
         Console.WriteLine($"[meshinfo2] verts={vm.VertexCount} faces={vm.FaceCount} bones={vm.Bones.Length} textures={vm.Textures.Length}");
         foreach (var t in vm.Textures)
             Console.WriteLine($"  tex {t.Width}x{t.Height} {t.Name}");
+        return 0;
+    }
+    case "preview2glb":
+    {
+        var nativePath = positional.ElementAtOrDefault(1);
+        var outDir = GetOpt("--out") ?? "output";
+        if (nativePath == null) { Console.WriteLine("preview2glb requires a mesh path"); return 1; }
+        using var ms = pak.ReadFile(nativePath);
+        var vm = ViewportDataLoader.LoadMesh(ms, nativePath, 1,
+            path => { try { return pak.ReadFile(path); } catch { return null; } });
+        var visible = vm.Groups.Where(group => group.DefaultVisible).Select(group => group.Key).ToHashSet();
+        var output = Path.Combine(outDir, Path.GetFileNameWithoutExtension(nativePath) + ".preview.glb");
+        new ViewportExportService().ConvertToGlb(vm, visible, output);
+        Console.WriteLine($"[preview2glb] -> {output} visibleGroups={visible.Count}/{vm.Groups.Length} textures={vm.Textures.Length}");
         return 0;
     }
     default:
