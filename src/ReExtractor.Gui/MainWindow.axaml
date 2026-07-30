@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ReExtractor.Gui"
         x:Class="ReExtractor.Gui.MainWindow"
@@ -27,9 +27,9 @@
         <MenuItem Header="重新加载文件树" Click="OnReloadFileTreeClicked"/>
       </MenuItem>
       <MenuItem Header="设置" Click="OnSettingsClicked"/>
+      <MenuItem Header="环境" Click="OnEnvironmentClicked"/>
       <MenuItem Header="关于" Click="OnAboutClicked"/>
     </Menu>
-
     <!-- Fixed status bar: current state only; detailed output stays in the log panel. -->
     <Border DockPanel.Dock="Bottom" Margin="-12,8,-12,-12" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,1,0,0" Padding="12,6">
@@ -70,14 +70,20 @@
             </Grid>
 
             <Separator Margin="0,0,0,8"/>
-            <TextBlock Text="游戏文件夹（可选）" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBlock Text="游戏文件夹" FontWeight="SemiBold" Margin="0,0,0,5"/>
             <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
               <TextBox Grid.Column="0" x:Name="GameDirBox" Watermark="自动扫描目录内全部 PAK"/>
               <Button Grid.Column="1" Content="选择…" Click="OnChooseGameDirClicked" Margin="6,0,0,0"/>
             </Grid>
-            <Button Content="扫描并加载 PAK" Click="OnLoadGameDirClicked" HorizontalAlignment="Stretch"
+            <Button Click="OnLoadGameDirClicked" HorizontalAlignment="Stretch" Height="64" Padding="14,10"
                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                    Background="#2563a8" Foreground="White" Margin="0,0,0,8"/>
+                    Background="#0e72d8" Foreground="White" Margin="0,2,0,12"
+                    BorderBrush="#58a6ff" BorderThickness="1">
+              <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="扫描并加载 PAK" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center"/>
+                <TextBlock Text="从游戏文件夹开始" FontSize="11" Foreground="#d9ecff" Margin="0,3,0,0" HorizontalAlignment="Center"/>
+              </StackPanel>
+            </Button>
 
             <Button Click="OnOpenPakClicked" Height="92" HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
@@ -102,8 +108,8 @@
               <MenuFlyout>
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
-                <MenuItem Header="加载动画列表" Click="OnCtxAddAnim"/>
-                <MenuItem Header="提取并在文件夹中显示" Click="OnCtxShowExplorer"/>
+
+                <MenuItem Header="打开导出文件夹" Click="OnCtxShowExplorer"/>
               </MenuFlyout>
             </TreeView.ContextFlyout>
             <TreeView.DataTemplates>
@@ -117,8 +123,8 @@
               <MenuFlyout>
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
-                <MenuItem Header="加载动画列表" Click="OnCtxAddAnim"/>
-                <MenuItem Header="提取并在文件夹中显示" Click="OnCtxShowExplorer"/>
+
+                <MenuItem Header="打开导出文件夹" Click="OnCtxShowExplorer"/>
               </MenuFlyout>
             </ListBox.ContextFlyout>
             <ListBox.ItemTemplate>
@@ -137,7 +143,7 @@
         <Border DockPanel.Dock="Top" Background="#20252d" BorderBrush="#394352" BorderThickness="1"
                 CornerRadius="6" Padding="8" Margin="0,0,0,6">
           <StackPanel Spacing="5">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto">
               <TextBlock Grid.Column="0" Text="视图" VerticalAlignment="Center" Margin="0,0,5,0"/>
               <ComboBox Grid.Column="1" x:Name="ViewCombo" Width="105" SelectedIndex="0"
                         SelectionChanged="OnViewportViewChanged">
@@ -154,7 +160,9 @@
                 <ComboBoxItem>材质</ComboBoxItem><ComboBoxItem>贴图原色</ComboBoxItem><ComboBoxItem>实体</ComboBoxItem>
                 <ComboBoxItem>线框</ComboBoxItem><ComboBoxItem>材质 + 边线</ComboBoxItem>
               </ComboBox>
-              <TextBlock Grid.Column="7" x:Name="FpsText" Text="" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#9cdcfe"/>
+              <Button Grid.Column="6" x:Name="LoadTexturesButton" Content="加载贴图" Click="OnLoadTexturesClicked" Margin="8,0,0,0"
+                      ToolTip.Tip="默认只加载模型；需要材质贴图时再点击"/>
+              <TextBlock Grid.Column="8" x:Name="FpsText" Text="" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#9cdcfe"/>
             </Grid>
             <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
               <CheckBox Grid.Column="0" x:Name="GridCheck" Content="网格（G）" IsChecked="True"
@@ -181,7 +189,7 @@
             <!-- Routed-input surface: native OpenGL surfaces do not reliably participate in
                  Avalonia hit testing on Windows. This transparent control owns capture/focus
                  and forwards camera gestures to the viewport. -->
-            <Border x:Name="ViewportInput" Background="#01000000" Focusable="True"
+            <Border x:Name="ViewportInput" Background="Transparent" Focusable="True"
                     Cursor="SizeAll" IsVisible="True"
                     PointerPressed="OnViewportPointerPressed"
                     PointerMoved="OnViewportPointerMoved"
@@ -302,8 +310,11 @@
                 <TextBlock Text="模型导出" Foreground="#7fc3ff" FontWeight="SemiBold" Margin="0,0,0,4"/>
                 <TextBlock Text="导出当前预览中可见的全部模型分件。"
                            TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,8"/>
-                <Button x:Name="ExportButton" Content="导出预览模型 FBX" Click="OnExportClicked"
-                        Background="#2563a8" Foreground="White" Padding="10,7"/>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <Button Grid.Column="0" x:Name="ExportButton" Content="导出预览模型 FBX" Click="OnExportClicked"
+                          Background="#2563a8" Foreground="White" Padding="10,7"/>
+                  <Button Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
+                </Grid>
               </StackPanel>
             </Border>
 
@@ -312,22 +323,19 @@
                 <TextBlock Text="动画导出" Foreground="#d3a9ff" FontWeight="SemiBold" Margin="0,0,0,4"/>
                 <TextBlock Text="每个动画单独导出，不包含模型。"
                            TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,8"/>
-                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" Margin="0,0,0,7">
+                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto" Margin="0,0,0,7">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="范围" VerticalAlignment="Center" Margin="0,0,8,6"/>
                   <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ExportAnimScopeCombo" SelectedIndex="0"
                             MinWidth="110" HorizontalAlignment="Stretch" Margin="0,0,0,6">
                     <ComboBoxItem>当前动画</ComboBoxItem>
                     <ComboBoxItem>全部动画</ComboBoxItem>
                   </ComboBox>
-                  <TextBlock Grid.Row="1" Grid.Column="0" Text="帧率" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                  <ComboBox Grid.Row="1" Grid.Column="1" x:Name="ExportAnimFpsCombo" SelectedIndex="0"
-                            MinWidth="110" HorizontalAlignment="Stretch">
-                    <ComboBoxItem>60 FPS</ComboBoxItem>
-                    <ComboBoxItem>30 FPS</ComboBoxItem>
-                  </ComboBox>
                 </Grid>
-                <Button x:Name="ExportAnimButton" Content="导出动画 FBX" Click="OnExportAnimClicked"
-                        Background="#65417f" Foreground="White" Padding="10,7"/>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <Button Grid.Column="0" x:Name="ExportAnimButton" Content="导出动画 FBX" Click="OnExportAnimClicked"
+                          Background="#65417f" Foreground="White" Padding="10,7"/>
+                  <Button Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
+                </Grid>
               </StackPanel>
             </Border>
           </StackPanel>

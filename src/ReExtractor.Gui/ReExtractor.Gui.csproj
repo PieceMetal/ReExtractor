@@ -13,6 +13,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>
@@ -34,8 +40,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\tools\export_models_fbx.py" Link="tools\export_models_fbx.py" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\tools\export_animations_fbx.py" Link="tools\export_animations_fbx.py" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="BundledFileLists\*.list" Link="filelists\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="..\..\tools\export_models_fbx.py" Link="EmbeddedTools\export_models_fbx.py" />
+    <EmbeddedResource Include="..\..\tools\export_animations_fbx.py" Link="EmbeddedTools\export_animations_fbx.py" />
+    <EmbeddedResource Include="BundledFileLists\*.list" Link="EmbeddedFileLists\%(Filename)%(Extension)" />
   </ItemGroup>
-</Project>
+
+  <Target Name="RemovePublishSymbols" AfterTargets="Publish">
+    <Delete Files="@(ResolvedFileToPublish->WithMetadataValue('Extension', '.pdb')->'%(FullPath)')" />
+    <Delete Files="$([System.IO.Directory]::GetFiles('$(PublishDir)', '*.pdb', System.IO.SearchOption.TopDirectoryOnly))" />
+  </Target></Project>

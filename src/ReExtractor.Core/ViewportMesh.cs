@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using ReeLib;
 using ReeLib.Common;
 using ReeLib.Mdf;
@@ -268,6 +268,8 @@ public sealed class AnimationClip
 {
     public required string Name;
     public required float Duration;
+    public required int FrameRate;
+    public required int FrameCount;
     public required Dictionary<int, BoneTrack> Tracks; // bone index -> track
     /// <summary>Tracks keyed by target skeleton bone name, used to animate every merged/overlaid model.</summary>
     public Dictionary<string, BoneTrack> NamedTracks = new(StringComparer.OrdinalIgnoreCase);
@@ -289,14 +291,14 @@ public static class ViewportDataLoader
 {
     private sealed record PreviewMaterial(ViewportTexture Texture, bool AlphaCutout);
 
-    public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null)
+    public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null, bool loadTextures = true)
     {
         using var mesh = MeshService.LoadMesh(meshStream, nativePath);
         var meshData = mesh.MeshData ?? throw new InvalidDataException("MeshData missing");
         var lod = meshData.LODs[Math.Min(lodIndex, meshData.LODs.Count - 1)];
 
         // resolve material textures via the model's .mdf2 (best effort)
-        var materialTextures = openResource == null
+        var materialTextures = openResource == null || !loadTextures
             ? new Dictionary<int, PreviewMaterial>()
             : ResolveMaterialTextures(mesh, nativePath, openResource);
 
@@ -521,10 +523,10 @@ public static class ViewportDataLoader
             // Do not treat wrinkle/expression/VFX ALBD maps as a base texture. Skin shaders
             // blend several of those maps at runtime; projecting one over the whole head
             // produces the characteristic repeated-face corruption seen on ch001_00_10.
-            var albedo = mat.Textures.FirstOrDefault(t => t.texType.Equals("BaseDielectricMap", StringComparison.OrdinalIgnoreCase))
-                ?? mat.Textures.FirstOrDefault(t => IsBaseColorSlot(t.texType, t.texPath));
             var atlasQuadrant = false;
-            string? albedoPath = albedo?.texPath;
+            string? albedoPath = GetMaterialBaseTexturePath(mat);
+            if (!string.IsNullOrEmpty(albedoPath) && IsNullTexture(albedoPath))
+                albedoPath = FindFamilyBaseTexturePath(mdf.Materials, mat);
             if (string.IsNullOrEmpty(albedoPath) && mat.Name.Contains("skin", StringComparison.OrdinalIgnoreCase))
             {
                 var wrinkle = mat.Textures.FirstOrDefault(t =>
@@ -556,6 +558,7 @@ public static class ViewportDataLoader
                 var baseColor = mat.Parameters.FirstOrDefault(parameter =>
                     parameter.paramName.Equals("BaseColor", StringComparison.OrdinalIgnoreCase))?.parameter ?? Vector4.One;
                 ApplyBaseColor(texture, baseColor);
+                ApplyCustomizeColorMasks(texture, mat, openResource);
                 var eyeColor = mat.Parameters.FirstOrDefault(parameter =>
                     parameter.paramName.Equals("Eye_ColorChange", StringComparison.OrdinalIgnoreCase))?.parameter;
                 if (eyeColor.HasValue) ApplyEyeColorChange(texture, eyeColor.Value);
@@ -567,7 +570,8 @@ public static class ViewportDataLoader
                 // mask into the exported/preview RGBA texture prevents eyebrow and beard cards
                 // from appearing as solid white or grey polygons.
                 var alphaHeader = mat.Textures.FirstOrDefault(candidate =>
-                    candidate.texType.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) &&
+                    (candidate.texType.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) ||
+                     candidate.texType.Equals("AlphaTranslucentOcclusionSSSMap", StringComparison.OrdinalIgnoreCase)) &&
                     !IsNullTexture(candidate.texPath));
                 if (alphaHeader != null)
                 {
@@ -587,6 +591,112 @@ public static class ViewportDataLoader
         return result;
     }
 
+
+
+    private static string? GetMaterialBaseTexturePath(MaterialData mat)
+    {
+        var albedo = mat.Textures.FirstOrDefault(t =>
+                t.texType.Equals("BaseDielectricMap", StringComparison.OrdinalIgnoreCase) && !IsNullTexture(t.texPath))
+            ?? mat.Textures.FirstOrDefault(t => IsBaseColorSlot(t.texType, t.texPath) && !IsNullTexture(t.texPath))
+            ?? mat.Textures.FirstOrDefault(t => t.texType.Equals("BaseDielectricMap", StringComparison.OrdinalIgnoreCase))
+            ?? mat.Textures.FirstOrDefault(t => IsBaseColorSlot(t.texType, t.texPath));
+        return albedo?.texPath;
+    }
+
+    private static string? FindFamilyBaseTexturePath(IEnumerable<MaterialData> materials, MaterialData mat)
+    {
+        var family = MaterialFamilyName(mat.Name);
+        if (string.IsNullOrWhiteSpace(family)) return null;
+        foreach (var other in materials)
+        {
+            if (ReferenceEquals(other, mat)) continue;
+            if (!MaterialFamilyName(other.Name).Equals(family, StringComparison.OrdinalIgnoreCase)) continue;
+            var path = GetMaterialBaseTexturePath(other);
+            if (!string.IsNullOrEmpty(path) && !IsNullTexture(path)) return path;
+        }
+        return null;
+    }
+
+    private static string MaterialFamilyName(string name)
+    {
+        var end = name.Length;
+        while (end > 0 && char.IsDigit(name[end - 1])) end--;
+        return name[..end];
+    }
+    private static void ApplyCustomizeColorMasks(ViewportTexture texture, MaterialData mat, Func<string, Stream?> openResource)
+    {
+        ApplyCustomizeColorMask(texture, mat, openResource, "CustomizeColor_Mask", 0);
+        ApplyCustomizeColorMask(texture, mat, openResource, "CustomizeColor_Mask2", 4);
+    }
+
+    private static void ApplyCustomizeColorMask(ViewportTexture texture, MaterialData mat,
+        Func<string, Stream?> openResource, string slotName, int colorOffset)
+    {
+        var maskHeader = mat.Textures.FirstOrDefault(candidate =>
+            candidate.texType.Equals(slotName, StringComparison.OrdinalIgnoreCase) &&
+            !IsNullTexture(candidate.texPath));
+        if (maskHeader == null) return;
+
+        var colors = new Vector4[4];
+        var rates = new float[4];
+        var hasAnyColor = false;
+        for (var i = 0; i < 4; i++)
+        {
+            colors[i] = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals($"CustomizeColor_{colorOffset + i}", StringComparison.OrdinalIgnoreCase))?.parameter ?? Vector4.One;
+            rates[i] = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals($"CustomizeColor_{colorOffset + i}_BlendRate", StringComparison.OrdinalIgnoreCase))?.parameter.X ?? 1f;
+            if (Math.Abs(colors[i].X - 1f) > 0.001f || Math.Abs(colors[i].Y - 1f) > 0.001f ||
+                Math.Abs(colors[i].Z - 1f) > 0.001f)
+                hasAnyColor = true;
+        }
+        if (!hasAnyColor) return;
+
+        using var maskStream = OpenNormalized(openResource, maskHeader.texPath);
+        if (maskStream == null) return;
+        using var mask = new TexService().DecodeToImage(maskStream, maskHeader.texPath);
+        if (mask.Width != texture.Width || mask.Height != texture.Height)
+            mask.Mutate(operation => operation.Resize(texture.Width, texture.Height));
+
+        mask.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < texture.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < texture.Width; x++)
+                {
+                    var maskPixel = row[x];
+                    var maskWeights = new[]
+                    {
+                        maskPixel.R / 255f,
+                        maskPixel.G / 255f,
+                        maskPixel.B / 255f,
+                        maskPixel.A / 255f,
+                    };
+                    var index = y * texture.Width + x;
+                    var pixel = texture.Pixels[index];
+                    var r = ((pixel >> 16) & 0xFF) / 255f;
+                    var g = ((pixel >> 8) & 0xFF) / 255f;
+                    var b = (pixel & 0xFF) / 255f;
+                    for (var i = 0; i < 4; i++)
+                    {
+                        var w = Math.Clamp(maskWeights[i] * rates[i], 0f, 1f);
+                        if (w <= 0.001f) continue;
+                        r = Lerp(r, r * colors[i].X, w);
+                        g = Lerp(g, g * colors[i].Y, w);
+                        b = Lerp(b, b * colors[i].Z, w);
+                    }
+                    var rr = (uint)Math.Clamp((int)MathF.Round(r * 255f), 0, 255);
+                    var gg = (uint)Math.Clamp((int)MathF.Round(g * 255f), 0, 255);
+                    var bb = (uint)Math.Clamp((int)MathF.Round(b * 255f), 0, 255);
+                    texture.Pixels[index] = (pixel & 0xFF000000) | (rr << 16) | (gg << 8) | bb;
+                }
+            }
+        });
+        BuildMipChain(texture);
+    }
+
+    private static float Lerp(float a, float b, float t) => a + (b - a) * t;
     private static bool IsNullTexture(string path)
         => path.Contains("NullWhite", StringComparison.OrdinalIgnoreCase)
            || path.Contains("NullBlack", StringComparison.OrdinalIgnoreCase)
@@ -945,6 +1055,8 @@ public static class ViewportDataLoader
         var tracks = new Dictionary<int, BoneTrack>();
         var namedTracks = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);
         var duration = 0f;
+        var sourceFrameRate = 60;
+        var sourceFrameCount = 0;
         var targetBoneNames = meshBoneNames;
         foreach (var clip in mot.BoneClips)
         {
@@ -973,20 +1085,26 @@ public static class ViewportDataLoader
 
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } tr)
             {
-                var fps = clip.Translation.frameRate > 0 ? clip.Translation.frameRate : 30u;
+                var fps = TrackFrameRate(clip.Translation);
                 var frames = clip.Translation.frameIndexes;
+                var maxFrame = TrackMaxFrame(clip.Translation, tr.Length);
                 track.TransTimes = BuildTimes(frames, tr.Length, fps);
                 track.Translations = tr;
-                duration = Math.Max(duration, track.TransTimes[^1]);
+                sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
+                sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
+                duration = Math.Max(duration, maxFrame / fps);
             }
             if (clip.HasRotation && clip.Rotation!.rotations is { Length: > 0 } ro)
             {
-                var fps = clip.Rotation.frameRate > 0 ? clip.Rotation.frameRate : 30u;
+                var fps = TrackFrameRate(clip.Rotation);
                 var frames = clip.Rotation.frameIndexes;
+                var maxFrame = TrackMaxFrame(clip.Rotation, ro.Length);
                 track.RotTimes = BuildTimes(frames, ro.Length, fps);
                 track.Rotations = ro.Select(q => q.W < 0 ? new Quaternion(-q.X, -q.Y, -q.Z, -q.W) : q)
                                     .Select(Quaternion.Normalize).ToArray();
-                duration = Math.Max(duration, track.RotTimes[^1]);
+                sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
+                sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
+                duration = Math.Max(duration, maxFrame / fps);
             }
 
             tracks[boneIndex] = track;
@@ -996,8 +1114,17 @@ public static class ViewportDataLoader
         return new AnimationClip
         {
             Name = $"mot_{motion.motNumber}", Duration = duration,
+            FrameRate = sourceFrameRate, FrameCount = sourceFrameCount,
             Tracks = tracks, NamedTracks = namedTracks,
         };
+    }
+
+    private static uint TrackFrameRate(Track track) => track.frameRate > 0 ? track.frameRate : 60u;
+
+    private static float TrackMaxFrame(Track track, int count)
+    {
+        if (track.frameIndexes is { Length: > 0 } frames) return frames[^1];
+        return Math.Max(0, count - 1);
     }
 
     private static float[] BuildTimes(int[]? frames, int count, uint fps)

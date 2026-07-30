@@ -1,4 +1,5 @@
-import bpy
+﻿import bpy
+import math
 import os
 import sys
 
@@ -6,10 +7,10 @@ import sys
 def arguments():
     values = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if len(values) not in {2, 3}:
-        raise RuntimeError("需要参数：临时 GLB 目录、动画 FBX 输出目录、可选 FPS(30/60)")
+        raise RuntimeError("Need args: temp GLB directory, animation FBX output directory, optional FPS")
     fps = int(values[2]) if len(values) == 3 else 60
-    if fps not in {30, 60}:
-        raise RuntimeError(f"动画导出 FPS 只支持 30 或 60，当前 {fps}")
+    if fps <= 0:
+        raise RuntimeError(f"Invalid animation FPS: {fps}")
     return values[0], values[1], fps
 
 
@@ -22,6 +23,24 @@ def clear_scene():
             block.remove(item)
 
 
+def action_frame_range():
+    starts = []
+    ends = []
+    for action in bpy.data.actions:
+        if not action.fcurves:
+            continue
+        start, end = action.frame_range
+        starts.append(float(start))
+        ends.append(float(end))
+    if not starts:
+        return 0, 0
+    start = math.floor(min(starts))
+    end = math.ceil(max(ends))
+    if end < start:
+        end = start
+    return start, end
+
+
 source_dir, output_dir, export_fps = arguments()
 inputs = sorted(
     os.path.join(source_dir, name)
@@ -29,16 +48,15 @@ inputs = sorted(
     if name.lower().endswith(".glb")
 )
 if not inputs:
-    raise RuntimeError("MotionList 中没有可导出的动作")
+    raise RuntimeError("No exportable animations found in MotionList")
 
 os.makedirs(output_dir, exist_ok=True)
 scene = bpy.context.scene
 scene.render.fps = export_fps
 scene.render.fps_base = 1.0
 
-for source in inputs:
+for index, source in enumerate(inputs, start=1):
     clear_scene()
-    # glTF 时间单位是秒；导入前设置目标 FPS，可保持动作时长并落到对应时间轴。
     scene.render.fps = export_fps
     scene.render.fps_base = 1.0
     bpy.ops.import_scene.gltf(filepath=source)
@@ -49,15 +67,19 @@ for source in inputs:
 
     armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
     if not armatures:
-        raise RuntimeError(f"动作缺少骨架：{os.path.basename(source)}")
+        raise RuntimeError(f"Animation has no armature: {os.path.basename(source)}")
 
     primary = armatures[0]
     primary.name = "Armature"
     primary.data.name = "Armature"
-    # One animation FBX must contain the same single armature object as the model FBX.
     for duplicate in armatures[1:]:
         bpy.data.objects.remove(duplicate, do_unlink=True)
     armatures = [primary]
+
+    start_frame, end_frame = action_frame_range()
+    scene.frame_start = start_frame
+    scene.frame_end = end_frame
+    scene.frame_set(start_frame)
 
     bpy.ops.object.select_all(action="DESELECT")
     for armature in armatures:
@@ -77,6 +99,8 @@ for source in inputs:
         bake_anim_use_all_bones=True,
         bake_anim_step=1.0,
         bake_anim_simplify_factor=0.0,
+        bake_anim_start=start_frame,
+        bake_anim_end=end_frame,
         add_leaf_bones=False,
         global_scale=1.0,
         apply_scale_options="FBX_SCALE_NONE",
@@ -84,4 +108,4 @@ for source in inputs:
         armature_nodetype="NULL",
     )
     print(f"REEXTRACTOR_OK:{output_path}")
-    print(f"REEXTRACTOR_PROGRESS:{inputs.index(source) + 1}/{len(inputs)}", flush=True)
+    print(f"REEXTRACTOR_PROGRESS:{index}/{len(inputs)}", flush=True)

@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ReExtractor.Gui.SettingsWindow"
         Icon="/Assets/AppIcon.ico"
@@ -13,7 +13,10 @@
 
     <TextBlock Grid.Row="2" Grid.Column="0" Text="导出文件夹" VerticalAlignment="Center" Margin="0,0,10,0"/>
     <TextBox Grid.Row="2" Grid.Column="1" x:Name="OutputDirectoryBox" Margin="0,0,8,0"/>
-    <Button Grid.Row="2" Grid.Column="2" Content="选择…" Click="OnSelectOutputClicked"/>
+    <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Spacing="6">
+      <Button Content="选择…" Click="OnSelectOutputClicked"/>
+      <Button Content="打开" Click="OnOpenOutputClicked"/>
+    </StackPanel>
 
     <TextBlock Grid.Row="3" Grid.Column="1" Text="默认文件保存在程序目录；FBX 导出需要 Blender。"
                Foreground="#9aa6b5" FontSize="11" Margin="0,12,0,0"/>
