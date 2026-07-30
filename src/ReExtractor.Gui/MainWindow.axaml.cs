@@ -339,6 +339,7 @@ public partial class MainWindow : Window
         var name = NormalizeGameName(game.Name);
         var installDir = NormalizeGameName(game.InstallDir);
         var acronym = BuildAcronym(game.Name);
+        var extendedAcronym = BuildExtendedAcronym(game.Name);
         var best = 0;
 
         foreach (var query in queries)
@@ -351,6 +352,8 @@ public partial class MainWindow : Window
                 best = Math.Max(best, 70);
             if (query.Equals(acronym, StringComparison.OrdinalIgnoreCase))
                 best = Math.Max(best, 90);
+            if (query.Equals(extendedAcronym, StringComparison.OrdinalIgnoreCase))
+                best = Math.Max(best, 95);
         }
 
         return best;
@@ -392,6 +395,21 @@ public partial class MainWindow : Window
         return builder.ToString();
     }
 
+
+    private static string BuildExtendedAcronym(string value)
+    {
+        var words = value.Split([' ', '-', '_', ':', '.', '\'', '’'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(word => !word.Equals("demo", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (words.Length == 0) return "";
+
+        var builder = new StringBuilder(words.Length + 4);
+        var first = new string(words[0].Where(char.IsLetterOrDigit).Take(3).ToArray());
+        builder.Append(first.ToLowerInvariant());
+        foreach (var word in words.Skip(1))
+            if (word.Length > 0 && char.IsLetterOrDigit(word[0])) builder.Append(char.ToLowerInvariant(word[0]));
+        return builder.ToString();
+    }
     private static IEnumerable<SteamGameInstall> EnumerateInstalledSteamGames()
     {
         foreach (var library in EnumerateSteamLibraries().Distinct(StringComparer.OrdinalIgnoreCase))
@@ -468,6 +486,8 @@ public partial class MainWindow : Window
 
     private static string? ReadSteamInstallPath()
     {
+        if (!OperatingSystem.IsWindows()) return null;
+
         foreach (var keyPath in new[]
         {
             @"HKEY_CURRENT_USER\Software\Valve\Steam",

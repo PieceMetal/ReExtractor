@@ -29,7 +29,7 @@ ReExtractor 是一款面向 Windows 的 RE Engine 资源工作台，专注于将
 
 ## 下载与使用
 
-1. 在 GitHub Releases 下载 ReExtractor-v0.1.1-win-x64.zip。
+1. 在 GitHub Releases 下载 ReExtractor-v0.1.0-win-x64.zip。
 2. 解压到一个可写目录，运行 ReExtractor.Gui.exe。
 3. 打开“设置”，选择 Blender 可执行文件与默认导出目录。
 4. 在 list 管理器中选择或下载对应游戏的 list。
