@@ -8,8 +8,8 @@ using ReeLib.Mesh;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
-string gameDir = @"E:\Steam\steamapps\common\OnimushaWotS_Demo";
-string listFile = @"D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list";
+string gameDir = args.Length > 2 ? args[2] : @"E:\Steam\steamapps\common\OnimushaWotS_Demo";
+string listFile = args.Length > 3 ? args[3] : @"D:\OnimushaWotS_Demo_Tools\REasy_v0.7.3\resources\data\lists\ONIWOTS_STM.list";
 string outDir = Path.Combine(Path.GetTempPath(), "ReExtractor", "mdf2_diag");
 Directory.CreateDirectory(outDir);
 

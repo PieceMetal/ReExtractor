@@ -477,14 +477,27 @@ public static class ViewportDataLoader
     {
         var result = new Dictionary<int, PreviewMaterial>();
 
-        // mesh path: .../ch001_00_00.mesh.251215606 -> .../ch001_00_00.mdf2.50
+        // MDF naming varies by game. OWOTS uses the mesh basename directly with
+        // .mdf2.50, while SF6 commonly adds _v00 and uses .mdf2.31.
         var dotMesh = meshPath.IndexOf(".mesh.", StringComparison.OrdinalIgnoreCase);
         if (dotMesh < 0) return result;
-        var mdfPath = meshPath[..dotMesh] + ".mdf2.50";
-
-        using var mdfStream = openResource(mdfPath);
-        if (mdfStream == null) return result;
-
+        var meshBasePath = meshPath[..dotMesh];
+        Stream? foundMdfStream = null;
+        string? mdfPath = null;
+        foreach (var nameSuffix in MdfNameSuffixCandidates)
+        {
+            foreach (var versionSuffix in MdfVersionCandidates)
+            {
+                var candidate = meshBasePath + nameSuffix + versionSuffix;
+                foundMdfStream = openResource(candidate);
+                if (foundMdfStream == null) continue;
+                mdfPath = candidate;
+                break;
+            }
+            if (foundMdfStream != null) break;
+        }
+        if (foundMdfStream == null || mdfPath == null) return result;
+        using var mdfStream = foundMdfStream;
         MdfFile mdf;
         try
         {
@@ -652,12 +665,19 @@ public static class ViewportDataLoader
                type.Equals("AlbedoMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAlbedoMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseColor", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseAnisoShiftMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseAlphaMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("ALBD", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static readonly string[] MdfNameSuffixCandidates = ["", "_v00"];
+
+    private static readonly string[] MdfVersionCandidates =
+        [".mdf2.51", ".mdf2.50", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
+         ".mdf2.23", ".mdf2.21", ".mdf2.19", ".mdf2.13", ".mdf2.10", ".mdf2.6"];
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
     private static readonly string[] TexVersionCandidates =
-        [".251111100", ".241106027", ".250813143", ".240701001", ".240606151", ".760230703", ".143221013", ".35", ".34", ".30", ".28", ".190820018"];
+        [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018"];
 
     /// <summary>
     /// mdf texPath is relative ("Art/Model/.../x_ALBD.tex") and lacks natives prefix + version suffix.

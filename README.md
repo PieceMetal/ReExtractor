@@ -22,14 +22,14 @@ ReExtractor 是一款面向 Windows 的 RE Engine 资源工作台，专注于将
 | 游戏 / 能力 | 状态 |
 | --- | --- |
 | 《鬼武者：剑之道》DEMO | 已验证 PAK、贴图、模型、骨骼、动画与 FBX 工作流 |
-| 《街头霸王 6》 | PAK 解包与 list 路径还原可用；模型材质与动画为实验性支持 |
+| 《街头霸王 6》 | 已验证 PAK、list、模型基础材质与贴图读取；动画仍为实验性支持 |
 | 其他 RE Engine 游戏 | 取决于 PAK 版本、文件 list 与资源格式版本 |
 
 新游戏并不是仅更换 list 就能完整支持。PAK 解包、Mesh、Tex、MDF 和 Motlist 都可能需要新的格式适配与真实样本验证。
 
 ## 下载与使用
 
-1. 在 GitHub Releases 下载 ReExtractor-v0.1.0-win-x64.zip。
+1. 在 GitHub Releases 下载 ReExtractor-v0.1.1-win-x64.zip。
 2. 解压到一个可写目录，运行 ReExtractor.Gui.exe。
 3. 打开“设置”，选择 Blender 可执行文件与默认导出目录。
 4. 在 list 管理器中选择或下载对应游戏的 list。

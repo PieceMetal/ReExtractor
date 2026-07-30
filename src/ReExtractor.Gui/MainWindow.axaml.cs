@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Microsoft.Win32;
 using ReExtractor.Core;
 
 namespace ReExtractor.Gui;
@@ -270,11 +271,246 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnManagedListChanged(object? sender, SelectionChangedEventArgs e)
+    private async void OnManagedListChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_syncingManagedList) return;
         _settings.LastListPath = SelectedListPath ?? "";
         AppSettingsService.Save(_settings);
+        await TryAutoSelectGameDirectoryForListAsync(ManagedListCombo.SelectedItem as ManagedFileList);
+    }
+
+    private async Task TryAutoSelectGameDirectoryForListAsync(ManagedFileList? list)
+    {
+        if (list == null) return;
+
+        var match = await Task.Run(() => FindMatchingGameDirectory(list));
+        if (match == null)
+        {
+            ActionStatus.Text = $"没有自动找到与 {list.Title} 匹配的游戏目录，请手动选择游戏文件夹";
+            return;
+        }
+
+        GameDirBox.Text = match.Value.Directory;
+        ActionStatus.Text = $"已自动找到 {match.Value.Name}：{match.Value.Directory}";
+        await LoadGameDirectoryAsync();
+    }
+
+    private sealed record SteamGameInstall(string Name, string InstallDir, string Directory);
+
+    private static (string Name, string Directory)? FindMatchingGameDirectory(ManagedFileList list)
+    {
+        var queries = BuildListMatchKeys(list).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (queries.Length == 0) return null;
+
+        var steamMatch = EnumerateInstalledSteamGames()
+            .Select(game => new { Game = game, Score = ScoreSteamGameMatch(queries, game) })
+            .Where(item => item.Score > 0 && IsLikelyGamePakDirectory(item.Game.Directory))
+            .OrderByDescending(item => item.Score)
+            .Select(item => ((string Name, string Directory)?)(item.Game.Name, item.Game.Directory))
+            .FirstOrDefault();
+        if (steamMatch != null) return steamMatch;
+
+        return EnumerateCommonGameDirectories()
+            .Select(path => new { Path = path, Score = ScoreDirectoryMatch(queries, path) })
+            .Where(item => item.Score > 0 && IsLikelyGamePakDirectory(item.Path))
+            .OrderByDescending(item => item.Score)
+            .Select(item => ((string Name, string Directory)?)(Path.GetFileName(item.Path), item.Path))
+            .FirstOrDefault();
+    }
+
+    private static IEnumerable<string> BuildListMatchKeys(ManagedFileList list)
+    {
+        foreach (var value in new[] { list.Title, list.Identifier, Path.GetFileNameWithoutExtension(list.FilePath) })
+        {
+            var normalized = NormalizeGameName(value);
+            if (normalized.Length >= 3) yield return normalized;
+
+            var trimmed = value
+                .Replace("_STM", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("_Release", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("_Demo", "", StringComparison.OrdinalIgnoreCase);
+            normalized = NormalizeGameName(trimmed);
+            if (normalized.Length >= 3) yield return normalized;
+        }
+    }
+
+    private static int ScoreSteamGameMatch(IEnumerable<string> queries, SteamGameInstall game)
+    {
+        var name = NormalizeGameName(game.Name);
+        var installDir = NormalizeGameName(game.InstallDir);
+        var acronym = BuildAcronym(game.Name);
+        var best = 0;
+
+        foreach (var query in queries)
+        {
+            if (query.Equals(name, StringComparison.OrdinalIgnoreCase) || query.Equals(installDir, StringComparison.OrdinalIgnoreCase))
+                best = Math.Max(best, 100);
+            if (name.Contains(query, StringComparison.OrdinalIgnoreCase) || query.Contains(name, StringComparison.OrdinalIgnoreCase))
+                best = Math.Max(best, 80);
+            if (installDir.Contains(query, StringComparison.OrdinalIgnoreCase) || query.Contains(installDir, StringComparison.OrdinalIgnoreCase))
+                best = Math.Max(best, 70);
+            if (query.Equals(acronym, StringComparison.OrdinalIgnoreCase))
+                best = Math.Max(best, 90);
+        }
+
+        return best;
+    }
+
+    private static int ScoreDirectoryMatch(IEnumerable<string> queries, string path)
+    {
+        var folder = NormalizeGameName(Path.GetFileName(path));
+        var best = 0;
+        foreach (var query in queries)
+        {
+            if (query.Equals(folder, StringComparison.OrdinalIgnoreCase)) best = Math.Max(best, 85);
+            if (folder.Contains(query, StringComparison.OrdinalIgnoreCase) || query.Contains(folder, StringComparison.OrdinalIgnoreCase))
+                best = Math.Max(best, 60);
+        }
+        return best;
+    }
+
+    private static string NormalizeGameName(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch)) builder.Append(char.ToLowerInvariant(ch));
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildAcronym(string value)
+    {
+        var words = value.Split([' ', '-', '_', ':', '.', '\'', '’'], StringSplitOptions.RemoveEmptyEntries);
+        var builder = new StringBuilder(words.Length + 2);
+        foreach (var word in words)
+        {
+            if (word.Length == 0) continue;
+            if (word.All(char.IsDigit)) builder.Append(word);
+            else if (char.IsLetterOrDigit(word[0])) builder.Append(char.ToLowerInvariant(word[0]));
+        }
+        return builder.ToString();
+    }
+
+    private static IEnumerable<SteamGameInstall> EnumerateInstalledSteamGames()
+    {
+        foreach (var library in EnumerateSteamLibraries().Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var steamApps = Path.Combine(library, "steamapps");
+            if (!Directory.Exists(steamApps)) continue;
+
+            foreach (var manifest in Directory.EnumerateFiles(steamApps, "appmanifest_*.acf", SearchOption.TopDirectoryOnly))
+            {
+                var values = ReadSteamManifestValues(manifest);
+                if (!values.TryGetValue("name", out var name) || !values.TryGetValue("installdir", out var installDir))
+                    continue;
+
+                var directory = Path.Combine(steamApps, "common", installDir);
+                if (Directory.Exists(directory)) yield return new SteamGameInstall(name, installDir, directory);
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateCommonGameDirectories()
+    {
+        var roots = new List<string>();
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (!string.IsNullOrWhiteSpace(desktop)) roots.Add(desktop);
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(profile))
+        {
+            roots.Add(Path.Combine(profile, "Downloads"));
+            roots.Add(Path.Combine(profile, "Games"));
+        }
+
+        foreach (var drive in DriveInfo.GetDrives().Where(drive => drive.IsReady && drive.DriveType == DriveType.Fixed))
+        {
+            roots.Add(Path.Combine(drive.RootDirectory.FullName, "Games"));
+            roots.Add(Path.Combine(drive.RootDirectory.FullName, "Game"));
+            roots.Add(Path.Combine(drive.RootDirectory.FullName, "Capcom"));
+        }
+
+        foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase).Where(Directory.Exists))
+        {
+            foreach (var path in EnumerateDirectoriesShallow(root, 2))
+                yield return path;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDirectoriesShallow(string root, int maxDepth)
+    {
+        if (maxDepth < 0) yield break;
+        IEnumerable<string> children;
+        try { children = Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly).ToArray(); }
+        catch { yield break; }
+
+        foreach (var child in children)
+        {
+            yield return child;
+            foreach (var nested in EnumerateDirectoriesShallow(child, maxDepth - 1))
+                yield return nested;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateSteamLibraries()
+    {
+        var steamPath = ReadSteamInstallPath();
+        if (Directory.Exists(steamPath))
+        {
+            yield return steamPath;
+            foreach (var path in ReadSteamLibraryFolders(Path.Combine(steamPath, "steamapps", "libraryfolders.vdf")))
+                yield return path;
+        }
+
+        foreach (var path in new[] { @"C:\Program Files (x86)\Steam", @"C:\Program Files\Steam" })
+            if (Directory.Exists(path)) yield return path;
+    }
+
+    private static string? ReadSteamInstallPath()
+    {
+        foreach (var keyPath in new[]
+        {
+            @"HKEY_CURRENT_USER\Software\Valve\Steam",
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam",
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam",
+        })
+        {
+            if (Registry.GetValue(keyPath, "SteamPath", null) is string steamPath && Directory.Exists(steamPath))
+                return steamPath.Replace('/', Path.DirectorySeparatorChar);
+            if (Registry.GetValue(keyPath, "InstallPath", null) is string installPath && Directory.Exists(installPath))
+                return installPath.Replace('/', Path.DirectorySeparatorChar);
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> ReadSteamLibraryFolders(string vdfPath)
+    {
+        if (!File.Exists(vdfPath)) yield break;
+        foreach (var rawLine in File.ReadLines(vdfPath))
+        {
+            var line = rawLine.Trim();
+            if (!line.Contains("\"path\"", StringComparison.OrdinalIgnoreCase)) continue;
+            var parts = line.Split('"', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 4) continue;
+            var path = parts[^1].Replace(@"\\", @"\").Replace('/', Path.DirectorySeparatorChar);
+            if (Directory.Exists(path)) yield return path;
+        }
+    }
+
+    private static Dictionary<string, string> ReadSteamManifestValues(string manifestPath)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawLine in File.ReadLines(manifestPath))
+        {
+            var parts = rawLine.Trim().Split('"', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 4) values[parts[0]] = parts[^1];
+        }
+        return values;
+    }
+
+    private static bool IsLikelyGamePakDirectory(string path)
+    {
+        return Directory.Exists(path) && Directory.EnumerateFiles(path, "*.pak", SearchOption.TopDirectoryOnly).Any();
     }
 
     private async void OnSettingsClicked(object? sender, RoutedEventArgs e)
