@@ -246,10 +246,10 @@ public partial class MainWindow : Window
         }
         _settings.LastGameDirectory = gameDir;
         AppSettingsService.Save(_settings);
-        var paks = Directory.GetFiles(gameDir, "*.pak", SearchOption.TopDirectoryOnly);
+        var paks = FindPakFiles(gameDir).ToArray();
         if (paks.Length == 0)
         {
-            ActionStatus.Text = "该文件夹中没有找到 PAK 文件";
+            ActionStatus.Text = "该游戏文件夹中没有找到 PAK 文件";
             return;
         }
         await LoadPakFilesAsync(paks);
@@ -511,7 +511,7 @@ public partial class MainWindow : Window
             var line = rawLine.Trim();
             if (!line.Contains("\"path\"", StringComparison.OrdinalIgnoreCase)) continue;
             var parts = line.Split('"', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 4) continue;
+            if (parts.Length < 2) continue;
             var path = parts[^1].Replace(@"\\", @"\").Replace('/', Path.DirectorySeparatorChar);
             if (Directory.Exists(path)) yield return path;
         }
@@ -523,14 +523,39 @@ public partial class MainWindow : Window
         foreach (var rawLine in File.ReadLines(manifestPath))
         {
             var parts = rawLine.Trim().Split('"', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 4) values[parts[0]] = parts[^1];
+            if (parts.Length >= 2) values[parts[0]] = parts[^1];
         }
         return values;
     }
 
     private static bool IsLikelyGamePakDirectory(string path)
     {
-        return Directory.Exists(path) && Directory.EnumerateFiles(path, "*.pak", SearchOption.TopDirectoryOnly).Any();
+        return Directory.Exists(path) && FindPakFiles(path).Any();
+    }
+
+    private static IEnumerable<string> FindPakFiles(string root)
+    {
+        foreach (var pak in EnumerateFilesShallow(root, "*.pak", 4))
+            yield return pak;
+    }
+
+    private static IEnumerable<string> EnumerateFilesShallow(string root, string pattern, int maxDepth)
+    {
+        if (maxDepth < 0 || !Directory.Exists(root)) yield break;
+
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(root, pattern, SearchOption.TopDirectoryOnly).ToArray(); }
+        catch { yield break; }
+        foreach (var file in files) yield return file;
+
+        IEnumerable<string> children;
+        try { children = Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly).ToArray(); }
+        catch { yield break; }
+        foreach (var child in children)
+        {
+            foreach (var nested in EnumerateFilesShallow(child, pattern, maxDepth - 1))
+                yield return nested;
+        }
     }
 
     private async void OnSettingsClicked(object? sender, RoutedEventArgs e)
