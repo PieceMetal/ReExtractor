@@ -829,7 +829,12 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (sender is TreeView && row is FileTreeNode node)
                 FileTree.SelectedItem = node;
             else if (sender is ListBox && row is EntryRow entry)
-                SearchResults.SelectedItem = entry;
+            {
+                // Preserve a Ctrl/Shift multi-selection when opening the context menu on one
+                // of its rows. Right-clicking an unselected row still makes only that row current.
+                if (SearchResults.SelectedItems?.Contains(entry) != true)
+                    SearchResults.SelectedItem = entry;
+            }
             if (_contextPath != null) SelectPath(_contextPath);
             return;
         }
@@ -1189,6 +1194,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         VisconGroupList.SelectedItem = selectKey.HasValue
             ? rows.FirstOrDefault(row => row.Key == selectKey.Value)
             : null;
+        VisconGroupSummaryText.Text = rows.Length == 0
+            ? "未加载"
+            : $"{visible.Count}/{rows.Length} 可见";
         _syncingVisconUi = false;
     }
 
@@ -1198,7 +1206,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var row = (VisconGroupList.ItemsSource as IEnumerable<VisconGroupRow>)?.FirstOrDefault(x => x.Key == key);
         if (row != null) VisconGroupList.SelectedItem = row;
         Viewport.SetPrimaryGroupVisible(key, check.IsChecked == true);
-        ActionStatus.Text = $"模型组已更新 | {Viewport.StatusInfo} | F 可按当前可见组重新取景";
+        var total = (VisconGroupList.ItemsSource as IEnumerable<VisconGroupRow>)?.Count() ?? 0;
+        VisconGroupSummaryText.Text = total == 0
+            ? "未加载"
+            : $"{Viewport.VisiblePrimaryGroups.Count}/{total} 可见";
+        ActionStatus.Text = $"模型组已更新 | {Viewport.StatusInfo} | 按（F）可按当前可见组重新取景";
     }
 
     private void OnVisconSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1472,6 +1484,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     }
     private async void OnExportAnimClicked(object? sender, RoutedEventArgs e)
     {
+        if (ExportAnimScopeCombo.SelectedIndex >= 2)
+        {
+            await ExportAnimationBatchAsync();
+            return;
+        }
         if (_pak == null || _currentMotlistPath == null)
         { ActionStatus.Text = "请先在当前预览模型上加载一个动画列表"; return; }
         var exportModels = Viewport.ExportModels;
@@ -1547,6 +1564,13 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             EndProgress(progress);
         }
     }
+
+    private void OnExportAnimScopeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (AnimBatchPanel is null) return;
+        AnimBatchPanel.IsVisible = ExportAnimScopeCombo.SelectedIndex >= 2;
+    }
+
     private async Task ExportPreviewModelsFbxAsync()
     {
         if (_pak == null) return;
@@ -1769,6 +1793,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     // ---- Merge panel: collect models, then load-merge with smart skeleton check ----
     private readonly List<string> _mergeQueue = new();
+    private readonly List<string> _animationExportQueue = new();
 
     private void RefreshMergeList()
     {
@@ -1802,6 +1827,226 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     {
         _mergeQueue.Clear();
         RefreshMergeList();
+    }
+
+    private void RefreshAnimationExportList()
+    {
+        AnimBatchListBox.ItemsSource = null;
+        AnimBatchListBox.ItemsSource = _animationExportQueue.ToArray();
+        AnimBatchCountText.Text = $"{_animationExportQueue.Count} 个列表";
+    }
+
+    private int AddAnimationExportPaths(IEnumerable<string> paths)
+    {
+        var added = 0;
+        foreach (var path in paths.Where(path => KindOf(path) == "motlist")
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (_animationExportQueue.Any(existing =>
+                    existing.Equals(path, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            _animationExportQueue.Add(path);
+            added++;
+        }
+        if (added > 0) RefreshAnimationExportList();
+        return added;
+    }
+
+    private IReadOnlyList<string> SelectedResourcePaths()
+    {
+        var selected = new List<string>();
+        if (SearchResults.IsVisible && SearchResults.SelectedItems != null)
+            selected.AddRange(SearchResults.SelectedItems.OfType<EntryRow>().Select(row => row.Path));
+        if (_selectedPath != null) selected.Add(_selectedPath);
+        return selected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private void OnCtxAddToAnimBatch(object? sender, RoutedEventArgs e)
+    {
+        var contextPath = PathFromSender(sender);
+        var paths = SelectedResourcePaths().ToList();
+        if (contextPath != null && paths.All(path =>
+                !path.Equals(contextPath, StringComparison.OrdinalIgnoreCase)))
+            paths.Add(contextPath);
+        var added = AddAnimationExportPaths(paths);
+        if (added > 0) ExportAnimScopeCombo.SelectedIndex = 2;
+        ActionStatus.Text = added > 0
+            ? $"已加入 {added} 个 MotionList，批量导出列表共 {_animationExportQueue.Count} 个"
+            : "请选择一个或多个 MotionList";
+    }
+
+    private void OnAnimBatchAddSelectedClicked(object? sender, RoutedEventArgs e)
+    {
+        var added = AddAnimationExportPaths(SelectedResourcePaths());
+        if (added > 0) ExportAnimScopeCombo.SelectedIndex = 2;
+        ActionStatus.Text = added > 0
+            ? $"已加入 {added} 个 MotionList，批量导出列表共 {_animationExportQueue.Count} 个"
+            : "请先在左侧选择 MotionList；搜索结果支持 Ctrl / Shift 多选";
+    }
+
+    private void OnAnimBatchAddSearchResultsClicked(object? sender, RoutedEventArgs e)
+    {
+        if (!SearchResults.IsVisible || SearchResults.ItemsSource is not IEnumerable<EntryRow> rows)
+        {
+            ActionStatus.Text = "请先在左侧输入搜索条件，再添加当前搜索结果";
+            return;
+        }
+        var added = AddAnimationExportPaths(rows.Select(row => row.Path));
+        if (added > 0) ExportAnimScopeCombo.SelectedIndex = 2;
+        ActionStatus.Text = added > 0
+            ? $"已从搜索结果加入 {added} 个 MotionList，批量导出列表共 {_animationExportQueue.Count} 个"
+            : "当前搜索结果中没有可新增的 MotionList";
+    }
+
+    private void OnAnimBatchRemoveClicked(object? sender, RoutedEventArgs e)
+    {
+        var selected = AnimBatchListBox.SelectedItems?.OfType<string>().ToArray() ?? [];
+        if (selected.Length == 0 && AnimBatchListBox.SelectedItem is string item) selected = [item];
+        foreach (var path in selected) _animationExportQueue.Remove(path);
+        RefreshAnimationExportList();
+        ActionStatus.Text = selected.Length > 0
+            ? $"已移除 {selected.Length} 项，批量导出列表剩余 {_animationExportQueue.Count} 个"
+            : "请先在动画批量导出列表中选择要移除的项目";
+    }
+
+    private void OnAnimBatchClearClicked(object? sender, RoutedEventArgs e)
+    {
+        _animationExportQueue.Clear();
+        RefreshAnimationExportList();
+        ActionStatus.Text = "动画批量导出列表已清空";
+    }
+
+    private async Task ExportAnimationBatchAsync()
+    {
+        if (_pak == null) { ActionStatus.Text = "请先加载游戏 PAK"; return; }
+        if (_animationExportQueue.Count == 0)
+        { ActionStatus.Text = "请先把 MotionList 加入动画批量导出列表"; return; }
+
+        var exportModels = Viewport.ExportModels;
+        if (exportModels.Count == 0)
+        { ActionStatus.Text = "请先加载与这些 MotionList 对应的角色模型，批量导出需要它的骨架"; return; }
+        if (!await EnsureBlenderReadyAsync()) return;
+
+        var paths = _animationExportQueue.ToArray();
+        var outDir = Path.GetFullPath(CurrentOutputDirectory);
+        var blender = CurrentBlenderPath;
+        var progress = BeginProgress($"正在统计 {paths.Length} 个 MotionList…");
+        ActionStatus.Text = $"正在批量导出 {paths.Length} 个 MotionList 的全部动画…";
+        ExportAnimButton.IsEnabled = false;
+        ExportAnimScopeCombo.IsEnabled = false;
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                EnsureBlender(blender);
+                var models = exportModels
+                    .Select(model => (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups))
+                    .ToArray();
+                var merged = new ViewportExportService().BuildMergedExportModel(models);
+                var motionCounts = new int[paths.Length];
+                var failures = new List<string>();
+                for (var listIndex = 0; listIndex < paths.Length; listIndex++)
+                {
+                    try
+                    {
+                        using var stream = _pak.ReadFile(paths[listIndex]);
+                        motionCounts[listIndex] = ViewportDataLoader.ListMotions(stream, paths[listIndex]).Count;
+                        if (motionCounts[listIndex] == 0)
+                            failures.Add($"{paths[listIndex].Split('/')[^1]}：没有可导出的内嵌动画");
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add($"{paths[listIndex].Split('/')[^1]}：{ex.Message}");
+                    }
+                }
+
+                var totalAnimations = motionCounts.Sum();
+                if (totalAnimations == 0)
+                    throw new InvalidOperationException("所选 MotionList 中没有可导出的内嵌动画");
+
+                const int exportFps = 60;
+                var totalWork = totalAnimations * 2;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    UpdateCountProgress(progress, 0, totalWork,
+                        $"批量导出 · {paths.Length} 个列表 / {totalAnimations} 个动画"));
+
+                var batchRoot = Path.Combine(outDir, "批量动画");
+                Directory.CreateDirectory(batchRoot);
+                var workRoot = CreateExportWorkDir("animation_batch");
+                var preparedOffset = 0;
+                var exportedOffset = 0;
+                var exportedFbx = 0;
+                var successfulLists = 0;
+                try
+                {
+                    for (var listIndex = 0; listIndex < paths.Length; listIndex++)
+                    {
+                        var motionCount = motionCounts[listIndex];
+                        if (motionCount == 0) continue;
+                        var listNumber = listIndex + 1;
+                        var motlistPath = paths[listIndex];
+                        var stem = NativeStem(motlistPath, ".motlist");
+                        var listWorkDir = Path.Combine(workRoot, $"{listNumber:D3}_{SafeFileName(stem)}");
+                        var finalDir = Path.Combine(batchRoot,
+                            $"{listNumber:D2}_{SafeFileName(stem)}_动画");
+                        Directory.CreateDirectory(listWorkDir);
+                        var prepareBase = preparedOffset;
+                        var exportBase = exportedOffset;
+                        try
+                        {
+                            using var motMs = _pak.ReadFile(motlistPath);
+                            new AnimationService().ConvertAllToGlbWithAnimation(
+                                merged.Mesh, motMs, motlistPath, listWorkDir,
+                                (current, total) =>
+                                {
+                                    var overall = prepareBase + current;
+                                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                                        UpdateCountProgress(progress, overall, totalWork,
+                                            $"准备列表 {listNumber}/{paths.Length} · {stem} {current}/{total}"));
+                                });
+
+                            RunBlenderBatch("export_animations_fbx.py", blender, listWorkDir, finalDir,
+                                (current, total) =>
+                                {
+                                    var overall = totalAnimations + exportBase + current;
+                                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                                        UpdateCountProgress(progress, overall, totalWork,
+                                            $"导出列表 {listNumber}/{paths.Length} · {stem} {current}/{total}"));
+                                }, exportFps.ToString());
+                            exportedFbx += motionCount;
+                            successfulLists++;
+                        }
+                        catch (Exception ex)
+                        {
+                            failures.Add($"{motlistPath.Split('/')[^1]}：{ex.Message}");
+                        }
+                        finally
+                        {
+                            preparedOffset += motionCount;
+                            exportedOffset += motionCount;
+                        }
+                    }
+                }
+                finally { TryDeleteDirectory(workRoot); }
+
+                return (exportedFbx, successfulLists, failures, batchRoot);
+            });
+
+            foreach (var failure in result.failures) AppendLog("批量动画跳过：" + failure);
+            ActionStatus.Text = result.failures.Count == 0
+                ? $"批量动画导出完成：{result.successfulLists} 个 MotionList，共 {result.exportedFbx} 个 FBX | {result.batchRoot}"
+                : $"批量动画导出完成：{result.successfulLists}/{paths.Length} 个 MotionList，{result.exportedFbx} 个 FBX；跳过 {result.failures.Count} 项，详情见日志 | {result.batchRoot}";
+        }
+        catch (Exception ex)
+        {
+            ActionStatus.Text = "批量动画导出失败：" + ex.Message;
+        }
+        finally
+        {
+            ExportAnimButton.IsEnabled = true;
+            ExportAnimScopeCombo.IsEnabled = true;
+            EndProgress(progress);
+        }
     }
 
     private static bool SameSkeleton(ViewportMesh a, ViewportMesh b)

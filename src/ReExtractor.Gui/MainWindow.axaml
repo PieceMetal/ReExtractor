@@ -85,17 +85,8 @@
               </StackPanel>
             </Button>
 
-            <Button Click="OnOpenPakClicked" Height="92" HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                    Background="#1b2028" BorderBrush="#435064" BorderThickness="1">
-              <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="＋  打开 PAK 文件" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                <TextBlock Text="点击选择，或将多个 PAK 拖到窗口" Foreground="#8e9aa9"
-                           FontSize="11" Margin="0,6,0,0" HorizontalAlignment="Center"/>
-              </StackPanel>
-            </Button>
             <TextBlock x:Name="StatusText" Text="尚未添加 PAK" Foreground="#9cdcfe"
-                       TextWrapping="Wrap" Margin="0,7,0,0"/>
+                       TextWrapping="Wrap" Margin="0,0,0,0"/>
           </StackPanel>
         </Border>
 
@@ -107,6 +98,7 @@
             <TreeView.ContextFlyout>
               <MenuFlyout>
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
+                <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
 
                 <MenuItem Header="打开导出文件夹" Click="OnCtxShowExplorer"/>
@@ -120,10 +112,12 @@
               </TreeDataTemplate>
             </TreeView.DataTemplates>
           </TreeView>
-          <ListBox x:Name="SearchResults" IsVisible="False" SelectionChanged="OnSearchSelectionChanged" PointerPressed="OnListPointerPressed">
+          <ListBox x:Name="SearchResults" IsVisible="False" SelectionMode="Multiple"
+                   SelectionChanged="OnSearchSelectionChanged" PointerPressed="OnListPointerPressed">
             <ListBox.ContextFlyout>
               <MenuFlyout>
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
+                <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
 
                 <MenuItem Header="打开导出文件夹" Click="OnCtxShowExplorer"/>
@@ -149,7 +143,7 @@
         <Border DockPanel.Dock="Top" Background="#20252d" BorderBrush="#394352" BorderThickness="1"
                 CornerRadius="6" Padding="8" Margin="0,0,0,6">
           <StackPanel Spacing="5">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto">
               <TextBlock Grid.Column="0" Text="视图" VerticalAlignment="Center" Margin="0,0,5,0"/>
               <ComboBox Grid.Column="1" x:Name="ViewCombo" Width="105" SelectedIndex="0"
                         SelectionChanged="OnViewportViewChanged">
@@ -158,17 +152,15 @@
               </ComboBox>
               <Button Grid.Column="2" Content="全部取景（F）" Click="OnViewportFrameAll" Margin="5,0,0,0"
                       ToolTip.Tip="将全部模型稳定地放入视口（快捷键 F）"/>
-              <Button Grid.Column="3" Content="选中取景（Z）" Click="OnVisconFrameSelected" Margin="5,0,0,0"
-                      ToolTip.Tip="将镜头对准右侧当前选中的模型组（快捷键 Z）"/>
-              <TextBlock Grid.Column="4" Text="显示" VerticalAlignment="Center" Margin="12,0,5,0"/>
-              <ComboBox Grid.Column="5" x:Name="RenderModeCombo" Width="115" SelectedIndex="0"
+              <TextBlock Grid.Column="3" Text="显示" VerticalAlignment="Center" Margin="12,0,5,0"/>
+              <ComboBox Grid.Column="4" x:Name="RenderModeCombo" Width="115" SelectedIndex="0"
                         SelectionChanged="OnViewportRenderModeChanged">
                 <ComboBoxItem>材质</ComboBoxItem><ComboBoxItem>贴图原色</ComboBoxItem><ComboBoxItem>实体</ComboBoxItem>
                 <ComboBoxItem>线框</ComboBoxItem><ComboBoxItem>材质 + 边线</ComboBoxItem>
               </ComboBox>
-              <Button Grid.Column="6" x:Name="LoadTexturesButton" Content="加载贴图" Click="OnLoadTexturesClicked" Margin="8,0,0,0"
+              <Button Grid.Column="5" x:Name="LoadTexturesButton" Content="加载贴图" Click="OnLoadTexturesClicked" Margin="8,0,0,0"
                       ToolTip.Tip="默认只加载模型；需要材质贴图时再点击"/>
-              <TextBlock Grid.Column="8" x:Name="FpsText" Text="" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#9cdcfe"/>
+              <TextBlock Grid.Column="7" x:Name="FpsText" Text="" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#9cdcfe"/>
             </Grid>
             <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
               <CheckBox Grid.Column="0" x:Name="GridCheck" Content="网格（G）" IsChecked="True"
@@ -252,34 +244,52 @@
       <DockPanel Grid.Column="4" Grid.RowSpan="3" Margin="6,0,0,0">
         <!-- 模型组固定在右上方；Mac 触控板滚动下方内容时不再把它一起卷走。 -->
         <StackPanel DockPanel.Dock="Top">
-          <TextBlock Text="模型组" Foreground="#aab2c0" FontWeight="SemiBold" Margin="0,0,0,7"/>
+          <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,7">
+            <TextBlock Grid.Column="0" Text="模型组" Foreground="#aab2c0" FontWeight="SemiBold"/>
+            <TextBlock Grid.Column="1" x:Name="VisconGroupSummaryText" Text="未加载"
+                       Foreground="#7f8895" FontSize="11" VerticalAlignment="Center"/>
+          </Grid>
           <Border Background="#20252d" BorderBrush="#303947" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,12">
             <StackPanel>
-              <TextBlock Text="默认外观已排除替代壳；选择组后按 Z 取景"
-                         Foreground="#8b929c" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
-              <ListBox x:Name="VisconGroupList" MaxHeight="210" SelectionMode="Single"
+              <TextBlock Text="勾选控制显示；单击选中后可单独显示或取景。"
+                         Foreground="#8b929c" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,7"/>
+              <ListBox x:Name="VisconGroupList" MaxHeight="220" SelectionMode="Single"
                        SelectionChanged="OnVisconSelectionChanged"
+                       Background="#171b21" BorderBrush="#303947" BorderThickness="1"
                        ScrollViewer.VerticalScrollBarVisibility="Auto"
                        ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.Styles>
+                  <Style Selector="ListBoxItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                  </Style>
+                </ListBox.Styles>
                 <ListBox.ItemTemplate>
                   <DataTemplate>
                     <CheckBox Content="{Binding Display}" IsChecked="{Binding IsVisible, Mode=OneWay}"
                               Tag="{Binding Key}" Click="OnVisconGroupClicked"
-                              ToolTip.Tip="{Binding MaterialTip}" Margin="0,1"/>
+                              ToolTip.Tip="{Binding MaterialTip}" Margin="2,1" Padding="4,3"
+                              HorizontalAlignment="Stretch"/>
                   </DataTemplate>
                 </ListBox.ItemTemplate>
               </ListBox>
-              <StackPanel Margin="0,7,0,0" Spacing="6">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Button Content="恢复默认" Click="OnVisconReset"/>
-                  <Button Content="全部显示" Click="OnVisconShowAll"
-                          ToolTip.Tip="诊断用途：替代壳可能互相覆盖"/>
-                  <Button Content="全部隐藏" Click="OnVisconHideAll"/>
-                </StackPanel>
-                <Button Content="单独显示选中组" Click="OnVisconIsolate"
-                        HorizontalAlignment="Left"
-                        ToolTip.Tip="只显示当前选中的模型组，并自动取景"/>
-              </StackPanel>
+              <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6" Margin="0,7,0,6">
+                <Button Grid.Column="0" Content="恢复默认" Click="OnVisconReset"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="6,5"/>
+                <Button Grid.Column="1" Content="全部显示" Click="OnVisconShowAll"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="6,5"
+                        ToolTip.Tip="替代壳可能互相覆盖"/>
+                <Button Grid.Column="2" Content="全部隐藏" Click="OnVisconHideAll"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="6,5"/>
+              </Grid>
+              <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                <Button Grid.Column="0" Content="仅显示选中组" Click="OnVisconIsolate"
+                        Background="#205b86" Foreground="White" Padding="7,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        ToolTip.Tip="隐藏其他模型组，只保留当前选中组"/>
+                <Button Grid.Column="1" Content="取景选中（Z）" Click="OnVisconFrameSelected"
+                        Padding="7,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        ToolTip.Tip="保持其他组可见，只将镜头对准选中组"/>
+              </Grid>
             </StackPanel>
           </Border>
         </StackPanel>
@@ -332,11 +342,59 @@
                 <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto" Margin="0,0,0,7">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="范围" VerticalAlignment="Center" Margin="0,0,8,6"/>
                   <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ExportAnimScopeCombo" SelectedIndex="0"
+                            SelectionChanged="OnExportAnimScopeChanged"
                             MinWidth="110" HorizontalAlignment="Stretch" Margin="0,0,0,6">
                     <ComboBoxItem>当前动画</ComboBoxItem>
-                    <ComboBoxItem>全部动画</ComboBoxItem>
+                    <ComboBoxItem>当前列表全部动画</ComboBoxItem>
+                    <ComboBoxItem>批量列表全部动画</ComboBoxItem>
                   </ComboBox>
                 </Grid>
+                <Border x:Name="AnimBatchPanel" IsVisible="False" Margin="0,0,0,10"
+                        Background="#211e29" BorderBrush="#50415f" BorderThickness="1"
+                        CornerRadius="5" Padding="8">
+                  <StackPanel>
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,2">
+                      <TextBlock Grid.Column="0" Text="MotionList 导出队列"
+                                 Foreground="#d3a9ff" FontWeight="SemiBold"/>
+                      <TextBlock Grid.Column="1" x:Name="AnimBatchCountText" Text="0 个列表"
+                                 Foreground="#9aa6b5" FontSize="11" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock Text="每个列表中的所有动画都会单独导出。"
+                               Foreground="#8f97a3" FontSize="11" Margin="0,0,0,7"/>
+
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="6" Margin="0,0,0,7">
+                      <Button Grid.Column="0" Content="＋ 添加左侧选中"
+                              Click="OnAnimBatchAddSelectedClicked" HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Center" Padding="7,6"
+                              ToolTip.Tip="添加左侧当前选中的 MotionList，支持 Ctrl / Shift 多选"/>
+                      <Button Grid.Column="1" Content="＋ 添加全部搜索结果"
+                              Click="OnAnimBatchAddSearchResultsClicked" HorizontalAlignment="Stretch"
+                              HorizontalContentAlignment="Center" Padding="7,6"
+                              ToolTip.Tip="将左侧当前搜索出来的所有 MotionList 一次加入"/>
+                    </Grid>
+
+                    <ListBox x:Name="AnimBatchListBox" Height="110" Margin="0,0,0,7"
+                             SelectionMode="Multiple" Background="#17151d"
+                             BorderBrush="#3b3444" BorderThickness="1"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                      <ListBox.ItemTemplate>
+                        <DataTemplate>
+                          <TextBlock Text="{Binding}" ToolTip.Tip="{Binding}"
+                                     TextTrimming="CharacterEllipsis" Margin="3,1"/>
+                        </DataTemplate>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                      <TextBlock Grid.Column="0" Text="Ctrl / Shift 可多选"
+                                 Foreground="#737b87" FontSize="10" VerticalAlignment="Center"/>
+                      <Button Grid.Column="1" Content="移除选中" Click="OnAnimBatchRemoveClicked"
+                              Padding="8,4"/>
+                      <Button Grid.Column="2" Content="清空队列" Click="OnAnimBatchClearClicked"
+                              Padding="8,4"/>
+                    </Grid>
+                  </StackPanel>
+                </Border>
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                   <Button Grid.Column="0" x:Name="ExportAnimButton" Content="导出动画 FBX" Click="OnExportAnimClicked"
                           Background="#65417f" Foreground="White" Padding="10,7"/>

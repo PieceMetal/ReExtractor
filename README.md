@@ -6,11 +6,20 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
-## [⬇ 下载 ReExtractor v1.0.0（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.0.0-win-x64.zip)
+## [⬇ 下载 ReExtractor v1.1.0（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.1.0-win-x64.zip)
 
 > 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
 
-当前版本：`v1.0.0`
+当前版本：`v1.1.0`
+
+## v1.1.0 更新
+
+- 新增多 MotionList 批量导出：支持在资源搜索结果中使用 Ctrl / Shift 多选，或将全部搜索结果一次加入导出队列。
+- 批量导出已整合到原有“动画导出”区域，每个 MotionList 中的动画仍保持单独 FBX 输出，并显示列表、动画和总任务进度。
+- 单个 MotionList 导出失败时会记录到日志并继续处理后续列表。
+- 优化动画导出队列布局，明确区分添加来源、队列内容和移除操作，并显示已加入的列表数量。
+- 优化模型组操作：增加可见数量提示、整行勾选，并统一恢复默认、全部显示、全部隐藏、仅显示选中组和取景选中组的布局。
+- 移除左侧重复的“打开 PAK 文件”大按钮，仍可通过文件菜单、拖放 PAK 或游戏目录扫描加载。
 
 ## v1.0.0 更新
 
@@ -35,7 +44,7 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 - 支持多个模型分件叠加预览，也支持同骨骼模型合并预览。
 - 支持播放 MotionList 动画，手动拖动进度条后会自动暂停。
 - 动画时间显示包含秒数、当前帧、总帧数和源帧率。
-- 支持导出当前预览模型 FBX，以及当前动画或全部动画 FBX。
+- 支持导出当前预览模型 FBX，以及当前动画、当前 MotionList 或多个 MotionList 的全部动画 FBX。
 - 动画导出按源动画速度和有效帧范围输出，避免尾部重复静止帧。
 - 默认导出文件夹位于程序 EXE 同级目录，可在主界面、环境窗口和设置中直接打开。
 - 首次启动会弹出环境窗口；未配置 Blender 时执行 FBX 导出也会提示配置环境。
@@ -58,15 +67,15 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 4. 在路径列表中选择或下载对应游戏的 list。
 5. 选择游戏文件夹扫描 PAK，或直接拖入 / 打开 PAK 文件。
 6. 双击资源进行预览。
-7. 使用右键菜单把模型加入合并器或叠加到当前预览。
-8. 使用右侧 FBX 导出面板导出模型或动画。
+7. 使用右键菜单把模型加入合并器，或把 MotionList 加入动画导出队列。
+8. 使用右侧 FBX 导出面板导出模型、单个动画或批量动画。
 
 ## FBX 导出说明
 
 - FBX 转换依赖 Blender，请在设置中选择 Blender 可执行文件。
 - “导出预览模型 FBX”会导出当前预览中可见的全部模型分件。
-- “导出动画 FBX”可导出当前动画或 MotionList 内全部动画；每个动画单独输出，不包含模型网格。
-- 动画导出使用源动画帧率和有效帧范围，不再提供手动 30 / 60 FPS 选项。
+- “导出动画 FBX”可导出当前动画、当前 MotionList 或批量列表中的全部动画；每个动画单独输出，不包含模型网格。
+- 单列表导出使用源动画帧率和有效帧范围；多 MotionList 批量导出统一按 60 FPS 烘焙。
 - 当前 FBX 坐标约定为 X 轴向右、Y 轴向前、Z 轴向上，并已针对 Unreal Engine 的模型、骨架和根运动流程进行修正。
 - 不同 RE Engine 游戏和资源版本仍可能存在特殊骨架或动画数据，导入 DCC 或 Unreal Engine 后建议进行一次抽样检查。
 - RE Engine 材质不能通过 FBX 完整还原，FBX 主要用于模型、骨架和动画交换。
