@@ -104,6 +104,39 @@ def remove_meshes_except(keep):
             bpy.data.meshes.remove(mesh_data)
 
 
+def ensure_export_root(armature):
+    """Add a real identity Root bone without changing any source rest pose."""
+    if any(bone.name.casefold() == "root" for bone in armature.data.bones):
+        return False
+
+    bpy.ops.object.select_all(action="DESELECT")
+    armature.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        source_roots = [bone for bone in armature.data.edit_bones if bone.parent is None]
+        source_matrices = {bone.name: bone.matrix.copy() for bone in source_roots}
+        root = armature.data.edit_bones.new("root")
+        # A Blender bone pointing along +Y has an identity local orientation. Keeping
+        # this bone at identity is essential: UE must not inherit an FBX conversion
+        # node as its skeleton root.
+        root.head = (0.0, 0.0, 0.0)
+        root.tail = (0.0, 0.01, 0.0)
+        root.use_deform = False
+
+        for bone in source_roots:
+            bone.parent = root
+            bone.use_connect = False
+            # Parenting must not alter C_Hip (or any other source root) in armature
+            # space; this also keeps the existing skin bind matrices valid.
+            bone.matrix = source_matrices[bone.name]
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    print(f"REEXTRACTOR_ROOT_MODE:ADDED_BONE:{len(source_roots)}", flush=True)
+    return True
+
+
 source_dir, output_path = arguments()
 inputs = sorted(
     os.path.join(source_dir, name)
@@ -126,9 +159,9 @@ for source in inputs:
 armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
 if armatures:
     primary = armatures[0]
-    # UE has a Blender compatibility rule that removes an armature object named exactly
-    # "Armature" instead of importing it as an extra root bone. Keep this name identical
-    # for model and animation exports.
+    # UE's Blender importer intentionally removes an FBX skeleton container named
+    # exactly "Armature". Never rename that conversion node to Root: doing so makes UE
+    # retain its 90-degree axis transform and lays the character on its side.
     primary.name = "Armature"
     primary.data.name = "Armature"
     primary_bones = {bone.name for bone in primary.data.bones}
@@ -144,6 +177,9 @@ if armatures:
                 if modifier.type == "ARMATURE" and modifier.object == duplicate:
                     modifier.object = primary
         bpy.data.objects.remove(duplicate, do_unlink=True)
+    armatures = [primary]
+    if not ensure_export_root(primary):
+        print("REEXTRACTOR_ROOT_MODE:EXPLICIT", flush=True)
 
 # Drop glTF helper/bone-shape meshes before joining. They are not skinned to the
 # character armature and can otherwise reappear in FBX/UE as a stray Cube mesh.

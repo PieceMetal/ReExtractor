@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
@@ -76,6 +77,51 @@ public sealed class FileTreeNode : INotifyPropertyChanged
     }
 }
 
+/// <summary>One item in the UE-style exported skeleton hierarchy.</summary>
+public sealed class BoneTreeNode : INotifyPropertyChanged
+{
+    private bool _isExpanded;
+
+    public int Index { get; }
+    public string Name { get; }
+    public int ParentIndex { get; }
+    public bool IsVirtualExportRoot { get; }
+    public bool IsDeform { get; }
+    public string Badge => IsVirtualExportRoot ? "导出补全" : IsDeform ? "" : "非蒙皮";
+    public string ToolTip { get; }
+    public List<BoneTreeNode> Children { get; } = new();
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set
+        {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded)));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public BoneTreeNode(int index, string name, int parentIndex, bool isVirtualExportRoot,
+        bool isDeform, string toolTip)
+    {
+        Index = index;
+        Name = name;
+        ParentIndex = parentIndex;
+        IsVirtualExportRoot = isVirtualExportRoot;
+        IsDeform = isDeform;
+        ToolTip = toolTip;
+    }
+
+    public void SetExpandedRecursive(bool expanded)
+    {
+        IsExpanded = expanded;
+        foreach (var child in Children) child.SetExpandedRecursive(expanded);
+    }
+}
+
 public partial class MainWindow : Window
 {
     private sealed class VisconGroupRow
@@ -115,6 +161,10 @@ public partial class MainWindow : Window
     private readonly List<string> _loadedPakPaths = new();
     private bool _syncingManagedList;
     private readonly IDisposable? _actionStatusLogSubscription;
+    private ViewportBone[]? _boneTreeSource;
+    private BoneTreeNode? _selectedBoneTreeNode;
+    private List<BoneTreeNode> _boneTreeRoots = new();
+    private bool _syncingBoneTreeUi;
 
     public MainWindow()
     {
@@ -146,11 +196,11 @@ public partial class MainWindow : Window
             if (Viewport.IsVisible) UpdateViewportChrome();
         };
         _fpsTimer.Start();
-        Viewport.StateChanged += UpdateViewportChrome;
+        Viewport.StateChanged += OnViewportStateChanged;
         _actionStatusLogSubscription = ActionStatus.GetObservable(TextBlock.TextProperty)
             .Subscribe(new TextObserver(AppendLog));
         AppendLog("工具已启动，请选择路径列表并加载 PAK");
-        Opened += async (_, _) => await ShowEnvironmentWindowAsync();
+        Opened += async (_, _) => await ShowEnvironmentWindowAsync();
 
     }
 
@@ -304,6 +354,13 @@ public partial class MainWindow : Window
         _settings.LastListPath = SelectedListPath ?? "";
         AppSettingsService.Save(_settings);
         await TryAutoSelectGameDirectoryForListAsync(ManagedListCombo.SelectedItem as ManagedFileList);
+    }
+
+    private void OnViewportStateChanged()
+    {
+        UpdateViewportChrome();
+        var bones = Viewport.PrimaryBones;
+        if (!ReferenceEquals(_boneTreeSource, bones)) RefreshBoneTree();
     }
 
     private async Task TryAutoSelectGameDirectoryForListAsync(ManagedFileList? list)
@@ -1105,6 +1162,173 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         ToolTip.SetTip(PlaybackButton, Viewport.IsPlaying ? "暂停" : "播放");
         _syncingViewportUi = false;
     }
+
+    private void RefreshBoneTree()
+    {
+        if (BoneTree is null || BoneTreeSummaryText is null || BoneRootStatusText is null) return;
+        var bones = Viewport.PrimaryBones;
+        _boneTreeSource = bones;
+        var previousIndex = _selectedBoneTreeNode?.Index;
+        var deformBones = Viewport.PrimaryDeformBoneIndices.ToHashSet();
+        var hasExplicitRoot = bones.Any(bone =>
+            string.Equals(bone.Name, "Root", StringComparison.OrdinalIgnoreCase));
+
+        var nodes = new BoneTreeNode[bones.Length];
+        for (var i = 0; i < bones.Length; i++)
+        {
+            var parent = bones[i].ParentIndex;
+            var effectiveParent = parent >= 0 && parent < bones.Length
+                ? bones[parent].Name
+                : hasExplicitRoot ? "（无）" : "Root（导出补全）";
+            nodes[i] = new BoneTreeNode(i, bones[i].Name, parent, false,
+                deformBones.Contains(i),
+                $"索引 #{i}\n父级：{effectiveParent}\n" +
+                (deformBones.Contains(i) ? "参与蒙皮" : "非蒙皮 / 辅助骨骼"));
+        }
+
+        var roots = new List<BoneTreeNode>();
+        for (var i = 0; i < bones.Length; i++)
+        {
+            var parent = bones[i].ParentIndex;
+            if (parent >= 0 && parent < nodes.Length && parent != i)
+                nodes[parent].Children.Add(nodes[i]);
+            else
+                roots.Add(nodes[i]);
+        }
+
+        if (!hasExplicitRoot && roots.Count > 0)
+        {
+            var virtualRoot = new BoneTreeNode(-1, "Root", -1, true, false,
+                "FBX 导出根骨骼\n源骨架没有 Root 时自动补充真实根骨，不改变现有骨骼姿势和蒙皮");
+            virtualRoot.Children.AddRange(roots);
+            roots = [virtualRoot];
+        }
+
+        foreach (var root in roots) ExpandBoneDepth(root, 2);
+
+        var query = BoneSearchBox?.Text?.Trim() ?? "";
+        if (query.Length > 0)
+            roots = roots.Select(root => FilterBoneTree(root, query))
+                .Where(root => root != null).Cast<BoneTreeNode>().ToList();
+
+        _boneTreeRoots = roots;
+        _syncingBoneTreeUi = true;
+        BoneTree.ItemsSource = roots;
+        var selected = previousIndex.HasValue ? FindBoneTreeNode(roots, previousIndex.Value) : null;
+        BoneTree.SelectedItem = selected;
+        _selectedBoneTreeNode = selected;
+        _syncingBoneTreeUi = false;
+
+        var sourceRootCount = bones.Count(bone => bone.ParentIndex < 0 || bone.ParentIndex >= bones.Length);
+        BoneTreeSummaryText.Text = bones.Length == 0
+            ? "未加载"
+            : hasExplicitRoot
+                ? $"{bones.Length:N0} 根 · {sourceRootCount} 个顶层"
+                : $"导出 {bones.Length + 1:N0} 根 · 源 {bones.Length:N0} 根";
+        BoneRootStatusText.Text = bones.Length == 0
+            ? "加载模型后显示骨骼层级"
+            : hasExplicitRoot
+                ? "✓ 源骨架包含 Root"
+                : "⚠ 源骨架无 Root；导出时自动补充 Root 骨骼";
+        BoneSelectionInfoText.Text = bones.Length == 0
+            ? "未加载模型"
+            : selected == null ? "选择骨骼可查看父级、子级和局部变换" : BoneSelectionInfo(selected);
+
+        if (previousIndex.HasValue && selected == null) Viewport.SelectPrimaryBone(null);
+    }
+
+    private static void ExpandBoneDepth(BoneTreeNode node, int depth)
+    {
+        node.IsExpanded = depth > 0;
+        foreach (var child in node.Children) ExpandBoneDepth(child, depth - 1);
+    }
+
+    private static BoneTreeNode? FilterBoneTree(BoneTreeNode source, string query)
+    {
+        var children = source.Children.Select(child => FilterBoneTree(child, query))
+            .Where(child => child != null).Cast<BoneTreeNode>().ToList();
+        if (!source.Name.Contains(query, StringComparison.OrdinalIgnoreCase) && children.Count == 0)
+            return null;
+        var clone = new BoneTreeNode(source.Index, source.Name, source.ParentIndex,
+            source.IsVirtualExportRoot, source.IsDeform, source.ToolTip) { IsExpanded = true };
+        clone.Children.AddRange(children);
+        return clone;
+    }
+
+    private static BoneTreeNode? FindBoneTreeNode(IEnumerable<BoneTreeNode> roots, int index)
+    {
+        foreach (var root in roots)
+        {
+            if (root.Index == index) return root;
+            var child = FindBoneTreeNode(root.Children, index);
+            if (child != null) return child;
+        }
+        return null;
+    }
+
+    private string BoneSelectionInfo(BoneTreeNode node)
+    {
+        if (node.IsVirtualExportRoot)
+        {
+            var children = string.Join("、", node.Children.Take(3).Select(child => child.Name));
+            if (node.Children.Count > 3) children += $" 等 {node.Children.Count} 个";
+            return $"Root  [导出补全]\n父级：（无）\n子级：{children}\n位置：世界原点\n作用：统一 UE 根层级，不改变源骨骼姿势";
+        }
+
+        var bones = Viewport.PrimaryBones;
+        if (node.Index < 0 || node.Index >= bones.Length) return node.Name;
+        var bone = bones[node.Index];
+        var parentName = bone.ParentIndex >= 0 && bone.ParentIndex < bones.Length
+            ? bones[bone.ParentIndex].Name
+            : bones.Any(item => string.Equals(item.Name, "Root", StringComparison.OrdinalIgnoreCase))
+                ? "（无）"
+                : "Root（导出补全）";
+        var childCount = bones.Count(item => item.ParentIndex == node.Index);
+        Matrix4x4.Decompose(bone.LocalBind, out var scale, out _, out var translation);
+        return $"{bone.Name}  [#{node.Index}]\n" +
+               $"父级：{parentName}　子级：{childCount}\n" +
+               $"类型：{(node.IsDeform ? "蒙皮骨骼" : "非蒙皮 / 辅助骨骼")}\n" +
+               $"源局部位置：X {translation.X:F3}　Y {translation.Y:F3}　Z {translation.Z:F3}\n" +
+               $"局部缩放：{scale.X:F3}, {scale.Y:F3}, {scale.Z:F3}";
+    }
+
+    private void OnBoneSearchChanged(object? sender, TextChangedEventArgs e) => RefreshBoneTree();
+
+    private void OnBoneTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingBoneTreeUi) return;
+        _selectedBoneTreeNode = BoneTree.SelectedItem as BoneTreeNode;
+        Viewport.SelectPrimaryBone(_selectedBoneTreeNode?.Index);
+        BoneSelectionInfoText.Text = _selectedBoneTreeNode == null
+            ? "选择骨骼可查看父级、子级和局部变换"
+            : BoneSelectionInfo(_selectedBoneTreeNode);
+        if (_selectedBoneTreeNode != null)
+            ActionStatus.Text = $"已选中骨骼：{_selectedBoneTreeNode.Name}；视口中以黄色高亮";
+    }
+
+    private void OnBoneExpandAll(object? sender, RoutedEventArgs e)
+    {
+        foreach (var root in _boneTreeRoots) root.SetExpandedRecursive(true);
+    }
+
+    private void OnBoneCollapseAll(object? sender, RoutedEventArgs e)
+    {
+        foreach (var root in _boneTreeRoots) root.SetExpandedRecursive(false);
+    }
+
+    private void OnBoneFrameSelected(object? sender, RoutedEventArgs e)
+    {
+        if (_selectedBoneTreeNode == null)
+        {
+            ActionStatus.Text = "请先在骨骼树中选择一根骨骼";
+            return;
+        }
+        Viewport.FramePrimaryBone(_selectedBoneTreeNode.Index);
+        ActionStatus.Text = $"镜头已对准骨骼：{_selectedBoneTreeNode.Name}";
+    }
+
+    private void OnBoneTreeDoubleTapped(object? sender, TappedEventArgs e)
+        => OnBoneFrameSelected(sender, new RoutedEventArgs());
 
     private void UpdateWorldAxisIndicator()
     {

@@ -46,7 +46,7 @@
     </Border>
 
     <!-- Main: left tree | splitter | center preview | splitter | right panel -->
-    <Grid ColumnDefinitions="330,5,*,5,300" RowDefinitions="*,5,180">
+    <Grid ColumnDefinitions="330,5,*,5,340" RowDefinitions="*,5,180">
 
       <!-- Left: list and PAK workflow + resource tree -->
       <DockPanel Grid.Column="0" Grid.RowSpan="3" Margin="0,0,6,0">
@@ -250,9 +250,11 @@
       <!-- Right: operation panels -->
       <DockPanel Grid.Column="4" Grid.RowSpan="3" Margin="6,0,0,0">
         <!-- 模型组固定在右上方；Mac 触控板滚动下方内容时不再把它一起卷走。 -->
-        <StackPanel DockPanel.Dock="Top">
+        <TabControl DockPanel.Dock="Top" Margin="0,0,0,10">
+          <TabItem Header="模型组" FontSize="13" Padding="9,5">
+          <StackPanel Margin="0,8,0,0">
           <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,7">
-            <TextBlock Grid.Column="0" Text="模型组" Foreground="#aab2c0" FontWeight="SemiBold"/>
+            <TextBlock Grid.Column="0" Text="可见模型组" Foreground="#aab2c0" FontWeight="SemiBold"/>
             <TextBlock Grid.Column="1" x:Name="VisconGroupSummaryText" Text="未加载"
                        Foreground="#7f8895" FontSize="11" VerticalAlignment="Center"/>
           </Grid>
@@ -299,7 +301,69 @@
               </Grid>
             </StackPanel>
           </Border>
-        </StackPanel>
+          </StackPanel>
+          </TabItem>
+
+          <TabItem Header="骨骼树" FontSize="13" Padding="9,5">
+            <StackPanel Margin="0,8,0,0">
+              <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+                <TextBlock Grid.Column="0" Text="导出骨骼层级" Foreground="#aab2c0" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="1" x:Name="BoneTreeSummaryText" Text="未加载"
+                           Foreground="#7f8895" FontSize="11" VerticalAlignment="Center"/>
+              </Grid>
+              <TextBox x:Name="BoneSearchBox" Watermark="搜索骨骼名称"
+                       TextChanged="OnBoneSearchChanged" Margin="0,0,0,6"
+                       FontSize="12" Padding="7,5"/>
+              <Border Background="#171b21" BorderBrush="#303947" BorderThickness="1"
+                      CornerRadius="4" Margin="0,0,0,7">
+                <TreeView x:Name="BoneTree" Height="260" SelectionMode="Single"
+                          SelectionChanged="OnBoneTreeSelectionChanged"
+                          DoubleTapped="OnBoneTreeDoubleTapped"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                  <TreeView.Styles>
+                    <Style Selector="TreeViewItem">
+                      <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                      <Setter Property="FontSize" Value="12"/>
+                    </Style>
+                  </TreeView.Styles>
+                  <TreeView.DataTemplates>
+                    <TreeDataTemplate DataType="local:BoneTreeNode" ItemsSource="{Binding Children}">
+                      <Border Background="Transparent" HorizontalAlignment="Stretch"
+                              Padding="3,1" ToolTip.Tip="{Binding ToolTip}">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                          <TextBlock Grid.Column="0" Text="◇" Foreground="#72aee6"
+                                     FontSize="11" FontWeight="Bold" Margin="0,0,5,0"/>
+                          <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Grid.Column="2" Text="{Binding Badge}" Foreground="#e5b567"
+                                     FontSize="10" Margin="6,0,2,0"/>
+                        </Grid>
+                      </Border>
+                    </TreeDataTemplate>
+                  </TreeView.DataTemplates>
+                </TreeView>
+              </Border>
+              <TextBlock x:Name="BoneRootStatusText" Text="加载模型后显示骨骼层级"
+                         Foreground="#e5b567" FontSize="11" TextWrapping="Wrap" Margin="1,0,1,7"/>
+              <Border Background="#20252d" BorderBrush="#303947" BorderThickness="1"
+                      CornerRadius="4" Padding="8" Margin="0,0,0,7" MinHeight="92">
+                <TextBlock x:Name="BoneSelectionInfoText" Text="未加载模型"
+                           Foreground="#c8d0da" FontSize="11" TextWrapping="Wrap"/>
+              </Border>
+              <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6">
+                <Button Grid.Column="0" Content="全部展开" Click="OnBoneExpandAll"
+                        FontSize="12" HorizontalContentAlignment="Center" Padding="5,5"/>
+                <Button Grid.Column="1" Content="全部折叠" Click="OnBoneCollapseAll"
+                        FontSize="12" HorizontalContentAlignment="Center" Padding="5,5"/>
+                <Button Grid.Column="2" Content="取景选中" Click="OnBoneFrameSelected"
+                        Background="#205b86" Foreground="White"
+                        FontSize="12" HorizontalContentAlignment="Center" Padding="5,5"
+                        ToolTip.Tip="双击骨骼也可以取景"/>
+              </Grid>
+            </StackPanel>
+          </TabItem>
+        </TabControl>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel>

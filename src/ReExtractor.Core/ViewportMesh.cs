@@ -108,17 +108,31 @@ public sealed class ViewportMesh
         }
 
         // ParentIndex belongs to each source skeleton and cannot be copied verbatim into
-        // the union skeleton. Remap it through the same per-source bone map used by skin
-        // weights; otherwise unique cloth/hair/head bones may point at unrelated union bones
-        // and explode as soon as UE evaluates the bind pose or an animation.
+        // the union skeleton. A character part may expose C_Hip as a top-level deform bone
+        // while another part contains the complete Root -> C_Hip hierarchy. Prefer any
+        // valid parent supplied by the merged sources instead of freezing the hierarchy to
+        // whichever part happened to be added first.
+        var preferredParents = Enumerable.Repeat(-1, bones.Count).ToArray();
+        for (var sourceMesh = 0; sourceMesh < meshes.Count; sourceMesh++)
+        {
+            var sourceBones = meshes[sourceMesh].Bones;
+            var map = perMeshBoneMap[sourceMesh];
+            for (var sourceBone = 0; sourceBone < sourceBones.Length; sourceBone++)
+            {
+                var sourceParent = sourceBones[sourceBone].ParentIndex;
+                if (sourceParent < 0 || sourceParent >= map.Length) continue;
+                var unifiedBone = map[sourceBone];
+                var unifiedParent = map[sourceParent];
+                if (unifiedParent != unifiedBone && preferredParents[unifiedBone] < 0)
+                    preferredParents[unifiedBone] = unifiedParent;
+            }
+        }
+
         for (var unifiedIndex = 0; unifiedIndex < bones.Count; unifiedIndex++)
         {
             var (sourceMesh, sourceBone) = boneSources[unifiedIndex];
             var source = meshes[sourceMesh].Bones[sourceBone];
-            var parent = source.ParentIndex;
-            var remappedParent = parent >= 0 && parent < perMeshBoneMap[sourceMesh].Length
-                ? perMeshBoneMap[sourceMesh][parent]
-                : -1;
+            var remappedParent = preferredParents[unifiedIndex];
             bones[unifiedIndex] = new ViewportBone
             {
                 Name = source.Name,

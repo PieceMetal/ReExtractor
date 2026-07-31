@@ -181,8 +181,12 @@ public sealed class ViewportExportService
             var parent = mesh.Bones[i].ParentIndex;
             if (parent >= 0 && parent < nodes.Length && parent != i) nodes[parent].AddNode(nodes[i]);
         }
-        var joints = mesh.DeformToBone.Select(boneIndex =>
-            (nodes[boneIndex], mesh.Bones[boneIndex].InverseGlobalBind)).ToArray();
+        // Keep the complete source hierarchy in the glTF skin, including non-deforming
+        // parents such as SF6's Root. Exporting deform joints only makes SharpGLTF omit
+        // those parents; Blender then sees C_Hip as the root and the FBX step cannot
+        // distinguish a genuinely rootless skeleton from a truncated one.
+        var joints = mesh.Bones.Select((bone, boneIndex) =>
+            (nodes[boneIndex], bone.InverseGlobalBind)).ToArray();
         return new SkeletonBuild(joints, nodes);
     }
 
@@ -245,7 +249,10 @@ public sealed class ViewportExportService
             .OrderByDescending(weight => weight.Item2).Take(4).ToArray();
         if (top.Length == 0) top = [(0, 1f)];
         var sum = top.Sum(weight => weight.Item2);
-        var bindings = top.Select(weight => (weight.Item1, weight.Item2 / sum)).ToArray();
+        // The glTF joint table now follows the full bone array. RE vertex weights still
+        // address deform-joint slots, so map each slot back to its full bone index.
+        var bindings = top.Select(weight =>
+            (mesh.DeformToBone[weight.Item1], weight.Item2 / sum)).ToArray();
         return new(new VertexPositionNormal(mesh.Vertices[index], Vector3.Normalize(normal)),
             new VertexTexture1(uv), new VertexJoints4(bindings));
     }

@@ -94,6 +94,9 @@ public sealed class GlViewport : OpenGlControlBase
 
     private int? _selectedPrimaryGroup;
 
+    // -1 represents the virtual FBX Root used when the source skeleton starts at C_Hip.
+    private int? _selectedPrimaryBone;
+
     private readonly List<GlModel> _extras = new();
 
     private readonly object _sceneLock = new();
@@ -235,6 +238,10 @@ public sealed class GlViewport : OpenGlControlBase
 
     public IReadOnlySet<int> VisiblePrimaryGroups => _primary?.VisibleGroups ?? EmptyGroupSet;
 
+    public ViewportBone[] PrimaryBones => _primary?.Mesh.Bones ?? [];
+
+    public int[] PrimaryDeformBoneIndices => _primary?.Mesh.DeformToBone ?? [];
+
     public IReadOnlyList<ExportModel> ExportModels
 
     {
@@ -336,6 +343,8 @@ public sealed class GlViewport : OpenGlControlBase
     {
 
         _selectedPrimaryGroup = null;
+
+        _selectedPrimaryBone = null;
 
         var primary = CreateModel(mesh, isPrimary: true);
         lock (_sceneLock)
@@ -582,6 +591,41 @@ public sealed class GlViewport : OpenGlControlBase
 
         RequestNextFrameRendering();
 
+    }
+
+    /// <summary>Select a source bone, or -1 for the virtual Root added by FBX export.</summary>
+    public void SelectPrimaryBone(int? index)
+    {
+        if (_primary == null) return;
+        _selectedPrimaryBone = index is -1 ||
+            index.HasValue && index.Value >= 0 && index.Value < _primary.Mesh.Bones.Length
+                ? index
+                : null;
+        if (_selectedPrimaryBone.HasValue) ShowSkeleton = true;
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>Keep the current viewing angle and move the camera target onto one bone.</summary>
+    public void FramePrimaryBone(int index)
+    {
+        if (_primary == null) return;
+        Vector3 point;
+        if (index == -1)
+        {
+            point = Vector3.Zero;
+        }
+        else
+        {
+            if (index < 0 || index >= _primary.Mesh.Bones.Length || index >= _primary.BoneGlobals.Length) return;
+            point = Vector3.Transform(_primary.BoneGlobals[index].Translation, ReToUeWorld);
+        }
+
+        _target = point;
+        var sceneSize = MathF.Max(0.1f, (_boundsMax - _boundsMin).Length());
+        _dist = MathF.Max(0.18f, sceneSize * 0.2f);
+        RequestNextFrameRendering();
+        StateChanged?.Invoke();
     }
 
 
@@ -2511,6 +2555,10 @@ public sealed class GlViewport : OpenGlControlBase
         }
 
         var total = persistentCount;
+        var skeletonStart = persistentCount;
+        var skeletonCount = 0;
+        var selectedBoneStart = persistentCount;
+        var selectedBoneCount = 0;
 
 
 
@@ -2522,6 +2570,8 @@ public sealed class GlViewport : OpenGlControlBase
 
             var globals = _primary.BoneGlobals;
 
+            var selectedSegments = new List<(Vector3 A, Vector3 B)>();
+
             for (var bi = 0; bi < bones.Length; bi++)
 
             {
@@ -2530,12 +2580,53 @@ public sealed class GlViewport : OpenGlControlBase
 
                 if (parent < 0 || parent >= globals.Length) continue;
 
-                AddLineVertex(Vector3.Transform(globals[parent].Translation, ReToUeWorld));
+                var a = Vector3.Transform(globals[parent].Translation, ReToUeWorld);
 
-                AddLineVertex(Vector3.Transform(globals[bi].Translation, ReToUeWorld));
+                var b = Vector3.Transform(globals[bi].Translation, ReToUeWorld);
+
+                if (_selectedPrimaryBone.HasValue &&
+                    (bi == _selectedPrimaryBone.Value || parent == _selectedPrimaryBone.Value))
+                    selectedSegments.Add((a, b));
+                else
+                {
+                    AddLineVertex(a);
+                    AddLineVertex(b);
+                }
 
             }
 
+            skeletonCount = _lineVerts.Count / 3 - skeletonStart;
+            selectedBoneStart = _lineVerts.Count / 3;
+
+            if (_selectedPrimaryBone == -1)
+            {
+                foreach (var rootIndex in Enumerable.Range(0, bones.Length)
+                             .Where(i => bones[i].ParentIndex < 0 || bones[i].ParentIndex >= bones.Length))
+                    selectedSegments.Add((Vector3.Zero,
+                        Vector3.Transform(globals[rootIndex].Translation, ReToUeWorld)));
+            }
+
+            foreach (var (a, b) in selectedSegments)
+            {
+                AddLineVertex(a);
+                AddLineVertex(b);
+            }
+
+            if (_selectedPrimaryBone.HasValue)
+            {
+                var selected = _selectedPrimaryBone.Value;
+                var point = selected == -1
+                    ? Vector3.Zero
+                    : selected >= 0 && selected < globals.Length
+                        ? Vector3.Transform(globals[selected].Translation, ReToUeWorld)
+                        : Vector3.Zero;
+                var markerSize = MathF.Max(0.005f, (_boundsMax - _boundsMin).Length() * 0.012f);
+                AddLineVertex(point - Vector3.UnitX * markerSize); AddLineVertex(point + Vector3.UnitX * markerSize);
+                AddLineVertex(point - Vector3.UnitY * markerSize); AddLineVertex(point + Vector3.UnitY * markerSize);
+                AddLineVertex(point - Vector3.UnitZ * markerSize); AddLineVertex(point + Vector3.UnitZ * markerSize);
+            }
+
+            selectedBoneCount = _lineVerts.Count / 3 - selectedBoneStart;
             total = _lineVerts.Count / 3;
 
         }
@@ -2611,15 +2702,24 @@ public sealed class GlViewport : OpenGlControlBase
 
         }
 
-        if (total > persistentCount)
+        if (skeletonCount > 0)
 
         {
 
             g.Uniform4(_lColor, 0.25f, 0.65f, 1f, 1f);
 
-            g.DrawArrays(PrimitiveType.Lines, persistentCount, (uint)(total - persistentCount));
+            g.DrawArrays(PrimitiveType.Lines, skeletonStart, (uint)skeletonCount);
             CaptureLineError(g, "DrawSkeleton");
 
+        }
+
+        if (selectedBoneCount > 0)
+        {
+            g.LineWidth(4f);
+            g.Uniform4(_lColor, 1f, 0.72f, 0.12f, 1f);
+            g.DrawArrays(PrimitiveType.Lines, selectedBoneStart, (uint)selectedBoneCount);
+            g.LineWidth(1f);
+            CaptureLineError(g, "DrawSelectedBone");
         }
 
         g.BindVertexArray(0);

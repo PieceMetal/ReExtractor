@@ -6,11 +6,21 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
-## [⬇ 下载 ReExtractor v1.1.1（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.1.1-win-x64.zip)
+## [⬇ 下载 ReExtractor v1.2.0（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.2.0-win-x64.zip)
 
 > 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
 
-当前版本：`v1.1.1`
+当前版本：`v1.2.0`
+
+## v1.2.0 更新
+
+- 新增类似 Unreal Engine 的骨骼树：按真实父子关系显示完整骨架，支持名称搜索、全部展开、全部折叠和双击取景。
+- 选中骨骼后可查看索引、父级、子级数量、蒙皮类型、源局部位置和缩放，并在视口中以黄色高亮相邻骨骼与三轴标记。
+- 骨骼树会区分蒙皮骨、非蒙皮辅助骨和导出补全 Root，便于在导出前确认最终 FBX / UE 层级。
+- FBX 导出保留完整源骨架，包括不参与蒙皮的 Root；修复部分街霸 6 角色导出后 Root 丢失、人物躺倒或前向不一致的问题。
+- 合并多个模型分件时会综合各分件的父子关系补全 `Root → C_Hip`，不再由首个加载分件决定最终根层级。
+- 对确实没有 Root 的源骨架，模型和动画统一补充不改变静止姿势与蒙皮的真实根骨，保持 X 向右、Y 向前、Z 向上的 UE 坐标约定。
+- 优化右侧模型组 / 骨骼树页签字号与间距，并启用新版应用图标。
 
 ## v1.1.1 更新
 

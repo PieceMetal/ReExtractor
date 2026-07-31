@@ -43,6 +43,33 @@ def action_frame_range():
     return start, end
 
 
+def ensure_export_root(armature):
+    """Add the same identity Root bone used by model export."""
+    if any(bone.name.casefold() == "root" for bone in armature.data.bones):
+        return False
+
+    bpy.ops.object.select_all(action="DESELECT")
+    armature.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        source_roots = [bone for bone in armature.data.edit_bones if bone.parent is None]
+        source_matrices = {bone.name: bone.matrix.copy() for bone in source_roots}
+        root = armature.data.edit_bones.new("root")
+        root.head = (0.0, 0.0, 0.0)
+        root.tail = (0.0, 0.01, 0.0)
+        root.use_deform = False
+        for bone in source_roots:
+            bone.parent = root
+            bone.use_connect = False
+            bone.matrix = source_matrices[bone.name]
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    print(f"REEXTRACTOR_ROOT_MODE:ADDED_BONE:{len(source_roots)}", flush=True)
+    return True
+
+
 source_dir, output_dir, export_fps = arguments()
 inputs = sorted(
     os.path.join(source_dir, name)
@@ -77,6 +104,8 @@ for index, source in enumerate(inputs, start=1):
     for duplicate in armatures[1:]:
         bpy.data.objects.remove(duplicate, do_unlink=True)
     armatures = [primary]
+    if not ensure_export_root(primary):
+        print("REEXTRACTOR_ROOT_MODE:EXPLICIT", flush=True)
 
     start_frame, end_frame = action_frame_range()
     scene.frame_start = int(start_frame)
