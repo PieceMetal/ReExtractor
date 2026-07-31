@@ -6,11 +6,16 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
-## [⬇ 下载 ReExtractor v1.1.0（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.1.0-win-x64.zip)
+## [⬇ 下载 ReExtractor v1.1.1（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.1.1-win-x64.zip)
 
 > 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
 
-当前版本：`v1.1.0`
+当前版本：`v1.1.1`
+
+## v1.1.1 更新
+
+- 搜索结果右键菜单新增“在目录树中定位”，可自动清空搜索、展开完整父目录并选中对应资源。
+- 改善街霸 6 等资源数量较多游戏的目录浏览体验，便于确认搜索结果所在的真实资源路径。
 
 ## v1.1.0 更新
 

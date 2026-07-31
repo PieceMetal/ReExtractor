@@ -95,6 +95,11 @@
                  TextChanged="OnSearchChanged" Margin="0,0,0,6"/>
         <Panel>
           <TreeView x:Name="FileTree" SelectionChanged="OnTreeSelectionChanged" PointerPressed="OnListPointerPressed">
+            <TreeView.Styles>
+              <Style Selector="TreeViewItem">
+                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+              </Style>
+            </TreeView.Styles>
             <TreeView.ContextFlyout>
               <MenuFlyout>
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
@@ -116,6 +121,8 @@
                    SelectionChanged="OnSearchSelectionChanged" PointerPressed="OnListPointerPressed">
             <ListBox.ContextFlyout>
               <MenuFlyout>
+                <MenuItem Header="在目录树中定位" Click="OnCtxLocateInTree"/>
+                <Separator/>
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
                 <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>

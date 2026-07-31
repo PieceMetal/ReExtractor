@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -12,19 +13,34 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
 using Microsoft.Win32;
 using ReExtractor.Core;
 
 namespace ReExtractor.Gui;
 
 /// <summary>One node in the left folder tree (folder or file leaf).</summary>
-public sealed class FileTreeNode
+public sealed class FileTreeNode : INotifyPropertyChanged
 {
     public string Name { get; }
     public string? FilePath { get; set; }
     public string Display { get; }
     public List<FileTreeNode> Children { get; } = new();
     private Dictionary<string, FileTreeNode>? _lookup;
+    private bool _isExpanded;
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set
+        {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded)));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
 
     public FileTreeNode(string name, string? display = null)
     {
@@ -40,6 +56,11 @@ public sealed class FileTreeNode
         _lookup[key] = node;
         Children.Add(node);
         return node;
+    }
+
+    public FileTreeNode? FindChild(string key)
+    {
+        return _lookup != null && _lookup.TryGetValue(key, out var node) ? node : null;
     }
 
     public void SortRecursive()
@@ -82,6 +103,7 @@ public partial class MainWindow : Window
     private PakService? _pak;
     private List<EntryRow> _all = new();
     private readonly Dictionary<string, EntryRow> _byPath = new(StringComparer.OrdinalIgnoreCase);
+    private FileTreeNode? _treeRoot;
     private string? _selectedPath;
     private string? _contextPath;
     private string? _lastMeshPath;
@@ -665,7 +687,7 @@ public partial class MainWindow : Window
         try
         {
             StatusText.Text = "加载中…";
-            var (pak, entries, roots) = await Task.Run(() =>
+            var (pak, entries, treeRoot) = await Task.Run(() =>
             {
                 var p = new PakService();
                 foreach (var pakPath in paths) p.AddPak(pakPath);
@@ -677,9 +699,10 @@ public partial class MainWindow : Window
 
             _pak = pak;
             _all = entries;
+            _treeRoot = treeRoot;
             _byPath.Clear();
             foreach (var row in entries) _byPath[row.Path] = row;
-            FileTree.ItemsSource = roots;
+            FileTree.ItemsSource = treeRoot.Children;
             ApplyFilter();
             _loadedPakPaths.Clear();
             _loadedPakPaths.AddRange(paths);
@@ -707,7 +730,7 @@ public partial class MainWindow : Window
     }
 
     private void OnExitClicked(object? sender, RoutedEventArgs e) => Close();
-    private static List<FileTreeNode> BuildTree(List<EntryRow> entries)
+    private static FileTreeNode BuildTree(List<EntryRow> entries)
     {
         var root = new FileTreeNode("");
         foreach (var entry in entries)
@@ -723,7 +746,22 @@ public partial class MainWindow : Window
             }
         }
         root.SortRecursive();
-        return root.Children;
+        return root;
+    }
+
+    private bool TryFindTreeNode(string path, out FileTreeNode node)
+    {
+        node = _treeRoot!;
+        if (_treeRoot == null) return false;
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var child = node.FindChild(parts[i]);
+            if (child == null) return false;
+            node = child;
+            if (i < parts.Length - 1) node.IsExpanded = true;
+        }
+        return string.Equals(node.FilePath, path, StringComparison.OrdinalIgnoreCase);
     }
 
     private void ApplyFilter()
@@ -1746,6 +1784,29 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (boundPath != null) return boundPath;
         }
         return _contextPath;
+    }
+
+    private void OnCtxLocateInTree(object? sender, RoutedEventArgs e)
+    {
+        var path = PathFromSender(sender);
+        if (path == null || !TryFindTreeNode(path, out var node))
+        {
+            ActionStatus.Text = "无法在当前目录树中定位该资源";
+            return;
+        }
+
+        SearchBox.Text = "";
+        FileTree.SelectedItem = node;
+        SelectPath(path);
+        FileTree.Focus();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var container = FileTree.GetVisualDescendants()
+                .OfType<TreeViewItem>()
+                .FirstOrDefault(item => ReferenceEquals(item.DataContext, node));
+            container?.BringIntoView();
+        }, Avalonia.Threading.DispatcherPriority.Background);
+        ActionStatus.Text = $"已在目录树中定位：{path}";
     }
 
     private async void OnCtxAddModel(object? sender, RoutedEventArgs e)
