@@ -114,7 +114,9 @@
             </TreeView.ContextFlyout>
             <TreeView.DataTemplates>
               <TreeDataTemplate DataType="local:FileTreeNode" ItemsSource="{Binding Children}">
-                <TextBlock Text="{Binding Display}"/>
+                <Border Background="Transparent" HorizontalAlignment="Stretch" Padding="2,1">
+                  <TextBlock Text="{Binding Display}"/>
+                </Border>
               </TreeDataTemplate>
             </TreeView.DataTemplates>
           </TreeView>
@@ -128,7 +130,11 @@
               </MenuFlyout>
             </ListBox.ContextFlyout>
             <ListBox.ItemTemplate>
-              <DataTemplate><TextBlock Text="{Binding Path}"/></DataTemplate>
+              <DataTemplate>
+                <Border Background="Transparent" HorizontalAlignment="Stretch" Padding="2,1">
+                  <TextBlock Text="{Binding Path}"/>
+                </Border>
+              </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
         </Panel>
@@ -190,7 +196,7 @@
                  Avalonia hit testing on Windows. This transparent control owns capture/focus
                  and forwards camera gestures to the viewport. -->
             <Border x:Name="ViewportInput" Background="Transparent" Focusable="True"
-                    Cursor="SizeAll" IsVisible="True"
+                    Cursor="Arrow" IsVisible="True"
                     PointerPressed="OnViewportPointerPressed"
                     PointerMoved="OnViewportPointerMoved"
                     PointerReleased="OnViewportPointerReleased"
@@ -203,18 +209,18 @@
                     Padding="8,4" Margin="8" IsHitTestVisible="False">
               <TextBlock x:Name="ViewportLabel" Text="用户视图 · 透视 · 材质" Foreground="#e5e9ef" FontWeight="SemiBold"/>
             </Border>
-            <!-- 3ds Max 风格世界坐标轴：固定在左下角，只随镜头方向旋转。 -->
+            <!-- UE 风格世界坐标轴：固定在左下角，明确标识 X 侧向 / Y 前向 / Z 向上。 -->
             <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10"
                     Width="92" Height="92" Background="#99141920" CornerRadius="5"
                     BorderBrush="#394352" BorderThickness="1" IsHitTestVisible="False">
               <Canvas Width="90" Height="90">
-                <Line x:Name="WorldAxisX" StartPoint="45,45" EndPoint="75,45" Stroke="#ef4444" StrokeThickness="3"/>
-                <Line x:Name="WorldAxisY" StartPoint="45,45" EndPoint="45,15" Stroke="#35c759" StrokeThickness="3"/>
-                <Line x:Name="WorldAxisZ" StartPoint="45,45" EndPoint="25,65" Stroke="#3b82f6" StrokeThickness="3"/>
-                <Ellipse Canvas.Left="41" Canvas.Top="41" Width="8" Height="8" Fill="#e5e9ef"/>
-                <TextBlock x:Name="WorldAxisXLabel" Text="X" Canvas.Left="76" Canvas.Top="36" Foreground="#ff6868" FontWeight="Bold"/>
-                <TextBlock x:Name="WorldAxisYLabel" Text="Y" Canvas.Left="41" Canvas.Top="2" Foreground="#48df6b" FontWeight="Bold"/>
-                <TextBlock x:Name="WorldAxisZLabel" Text="Z" Canvas.Left="12" Canvas.Top="64" Foreground="#60a5fa" FontWeight="Bold"/>
+                <Line x:Name="WorldAxisX" StartPoint="45,58" EndPoint="17,67" Stroke="#ef4444" StrokeThickness="4"/>
+                <Line x:Name="WorldAxisY" StartPoint="45,58" EndPoint="22,50" Stroke="#35c759" StrokeThickness="4"/>
+                <Line x:Name="WorldAxisZ" StartPoint="45,58" EndPoint="45,24" Stroke="#3b82f6" StrokeThickness="4"/>
+                <Ellipse Canvas.Left="41" Canvas.Top="54" Width="8" Height="8" Fill="#e5e9ef"/>
+                <TextBlock x:Name="WorldAxisXLabel" Text="X" Canvas.Left="5" Canvas.Top="61" Foreground="#ff6868" FontWeight="Bold"/>
+                <TextBlock x:Name="WorldAxisYLabel" Text="Y" Canvas.Left="11" Canvas.Top="42" Foreground="#48df6b" FontWeight="Bold"/>
+                <TextBlock x:Name="WorldAxisZLabel" Text="Z" Canvas.Left="40" Canvas.Top="5" Foreground="#60a5fa" FontWeight="Bold"/>
               </Canvas>
             </Border>
 

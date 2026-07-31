@@ -13,6 +13,11 @@ namespace ReExtractor.Core;
 /// <summary>Exports exactly what the interactive viewport currently shows.</summary>
 public sealed class ViewportExportService
 {
+    private static readonly Matrix4x4 ReToUeWorld = new(
+        1, 0, 0, 0,
+        0, 0, 1, 0,
+        0, -1, 0, 0,
+        0, 0, 0, 1);
     public string ConvertToGlb(ViewportMesh mesh, IReadOnlySet<int> visibleGroups, string outputPath)
     {
         var (scene, _) = BuildScene(mesh, visibleGroups);
@@ -71,7 +76,7 @@ public sealed class ViewportExportService
                     hasGeometry = true;
                 }
             }
-            if (hasGeometry) scene.AddRigidMesh(builder, Matrix4x4.Identity);
+            if (hasGeometry) scene.AddRigidMesh(builder, ReToUeWorld);
         }
         return (scene, skeleton.Nodes);
     }
@@ -165,7 +170,12 @@ public sealed class ViewportExportService
     {
         if (mesh.Bones.Length == 0 || mesh.DeformToBone.Length == 0)
             return new SkeletonBuild([], []);
-        var nodes = mesh.Bones.Select(bone => new NodeBuilder(bone.Name) { LocalMatrix = bone.LocalBind }).ToArray();
+        var nodes = mesh.Bones.Select((bone, index) =>
+        {
+            var local = bone.LocalBind;
+            if (bone.ParentIndex < 0) local = local * ReToUeWorld;
+            return new NodeBuilder(bone.Name) { LocalMatrix = local };
+        }).ToArray();
         for (var i = 0; i < mesh.Bones.Length; i++)
         {
             var parent = mesh.Bones[i].ParentIndex;
@@ -200,6 +210,10 @@ public sealed class ViewportExportService
             {
                 var keys = new Dictionary<float, Vector3>(Math.Min(transTimes.Length, translations.Length));
                 for (var k = 0; k < transTimes.Length && k < translations.Length; k++)
+                    // Keep animation keys in the skeleton's native local space. The Blender FBX
+                    // exporter applies the requested Y-forward/Z-up bone-space conversion while
+                    // baking the action. Pre-converting root motion here applies that basis change
+                    // twice and turns forward motion into negative Z (downward) in Unreal Engine.
                     keys[transTimes[k]] = translations[k];
                 node.WithLocalTranslation(animName, keys);
             }
@@ -217,7 +231,8 @@ public sealed class ViewportExportService
         var normal = index < mesh.Normals.Length ? mesh.Normals[index] : Vector3.UnitZ;
         if (normal.LengthSquared() < 1e-6f) normal = Vector3.UnitZ;
         var uv = index < mesh.Uvs.Length ? mesh.Uvs[index] : Vector2.Zero;
-        return new(new VertexPositionNormal(mesh.Vertices[index], Vector3.Normalize(normal)), new VertexTexture1(uv));
+        return new(new VertexPositionNormal(Vector3.Transform(mesh.Vertices[index], ReToUeWorld),
+            Vector3.Normalize(Vector3.TransformNormal(normal, ReToUeWorld))), new VertexTexture1(uv));
     }
 
     private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexJoints4> SkinnedVertex(ViewportMesh mesh, int index)

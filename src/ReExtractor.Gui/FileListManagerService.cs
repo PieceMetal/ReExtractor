@@ -4,7 +4,6 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -65,26 +64,8 @@ public sealed class FileListManagerService
     {
         Directory.CreateDirectory(LibraryDirectory);
         Directory.CreateDirectory(RemoteDirectory);
-        EnsureBundledFileLists();
     }
 
-
-    private void EnsureBundledFileLists()
-    {
-        var assembly = Assembly.GetExecutingAssembly();
-        foreach (var resourceName in assembly.GetManifestResourceNames()
-            .Where(name => name.Contains("EmbeddedFileLists", StringComparison.OrdinalIgnoreCase) &&
-                name.EndsWith(".list", StringComparison.OrdinalIgnoreCase)))
-        {
-            var fileName = resourceName.Split('.')[^2] + ".list";
-            var targetPath = Path.Combine(LibraryDirectory, fileName);
-            if (File.Exists(targetPath)) continue;
-            using var input = assembly.GetManifestResourceStream(resourceName);
-            if (input == null) continue;
-            using var output = File.Create(targetPath);
-            input.CopyTo(output);
-        }
-    }
     public IReadOnlyList<ManagedFileList> GetLocalLists()
     {
         var local = Directory.EnumerateFiles(LibraryDirectory, "*.list", SearchOption.TopDirectoryOnly)

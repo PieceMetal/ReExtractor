@@ -120,7 +120,9 @@ public sealed class GlViewport : OpenGlControlBase
 
     // camera (same orbit math as the software viewport)
 
-    private float _yaw = 0.7f, _pitch = 0.35f, _dist = 2.0f;
+    private const float DefaultYaw = -0.38f;
+    private const float DefaultPitch = 0.35f;
+    private float _yaw = DefaultYaw, _pitch = DefaultPitch, _dist = 3.0f;
 
     private Vector3 _target = Vector3.Zero;
 
@@ -145,6 +147,15 @@ public sealed class GlViewport : OpenGlControlBase
 
 
     private static readonly Vector3 LightDir = Vector3.Normalize(new(-0.45f, -0.75f, -0.55f));
+
+    // RE mesh data is internally evaluated in its native basis. The viewport world is UE-style:
+    // X right, Y forward, Z up. Convert at the render boundary so skinning/animation math stays
+    // in the source basis and the displayed model stands upright in UE world space.
+    private static readonly Matrix4x4 ReToUeWorld = new(
+        -1, 0, 0, 0,
+        0, 0, 1, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1);
 
 
 
@@ -337,7 +348,13 @@ public sealed class GlViewport : OpenGlControlBase
 
         StopPlayback();
 
-        FrameCamera();
+        RecalculateVisibleBounds();
+
+        _target = (_boundsMin + _boundsMax) * 0.5f;
+
+        BuildGridLines();
+
+        FitCamera();
 
         UpdateStatusInfo();
 
@@ -619,7 +636,7 @@ public sealed class GlViewport : OpenGlControlBase
 
             Projection = ViewportProjection.Perspective;
 
-            _yaw -= dx * 0.01f;
+            _yaw += dx * 0.01f;
 
             _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.56f, 1.56f);
 
@@ -773,7 +790,7 @@ public sealed class GlViewport : OpenGlControlBase
 
             case ViewPreset.Bottom: _yaw = 0f;                 _pitch = -MathF.PI * 0.5f; break;
 
-            default:                _yaw = 0.7f;               _pitch = 0.35f; break;
+            default:                _yaw = DefaultYaw;         _pitch = DefaultPitch; break;
 
         }
 
@@ -1774,14 +1791,13 @@ public sealed class GlViewport : OpenGlControlBase
         RecalculateVisibleBounds();
 
         _target = (_boundsMin + _boundsMax) * 0.5f;
-
         CurrentView = ViewPreset.Perspective;
 
         Projection = ViewportProjection.Perspective;
 
-        _yaw = 0.7f;
+        _yaw = DefaultYaw;
 
-        _pitch = 0.35f;
+        _pitch = DefaultPitch;
 
         BuildGridLines();
 
@@ -1823,7 +1839,7 @@ public sealed class GlViewport : OpenGlControlBase
 
                     var positions = model.Posed.Length == mesh.Vertices.Length ? model.Posed : mesh.Vertices;
 
-                    var v = positions[index];
+                    var v = Vector3.Transform(positions[index], ReToUeWorld);
 
                     min = Vector3.Min(min, v);
 
@@ -1883,9 +1899,11 @@ public sealed class GlViewport : OpenGlControlBase
 
                 if ((uint)index >= (uint)positions.Length) continue;
 
-                min = Vector3.Min(min, positions[index]);
+                var v = Vector3.Transform(positions[index], ReToUeWorld);
 
-                max = Vector3.Max(max, positions[index]);
+                min = Vector3.Min(min, v);
+
+                max = Vector3.Max(max, v);
 
                 found = true;
 
@@ -1947,7 +1965,7 @@ public sealed class GlViewport : OpenGlControlBase
 
         var horizontalFit = radius / MathF.Tan(MathF.Atan(MathF.Tan(halfFov) * MathF.Max(0.2f, aspect)));
 
-        _dist = MathF.Max(0.1f, MathF.Max(verticalFit, horizontalFit) * 1.12f);
+        _dist = MathF.Max(0.1f, MathF.Max(verticalFit, horizontalFit) * 1.02f);
 
     }
 
@@ -2138,7 +2156,7 @@ public sealed class GlViewport : OpenGlControlBase
         if (primary != null)
         {
             if (_playing || _clip != null) UploadPose(primary);
-            DrawModel(g, primary, mvp);
+            DrawModel(g, primary, ReToUeWorld * mvp);
         }
 
         var modelError = g.GetError();
@@ -2149,7 +2167,7 @@ public sealed class GlViewport : OpenGlControlBase
 
             if (_playing || _clip != null) UploadPose(extra);
 
-            DrawModel(g, extra, mvp);
+            DrawModel(g, extra, ReToUeWorld * mvp);
 
         }
 
@@ -2308,17 +2326,19 @@ public sealed class GlViewport : OpenGlControlBase
 
     private Vector3 GetEye() => _target + new Vector3(
 
-        MathF.Cos(_pitch) * MathF.Sin(_yaw), MathF.Sin(_pitch),
+        MathF.Cos(_pitch) * MathF.Sin(_yaw),
 
-        MathF.Cos(_pitch) * MathF.Cos(_yaw)) * _dist;
+        MathF.Cos(_pitch) * MathF.Cos(_yaw),
+
+        MathF.Sin(_pitch)) * _dist;
 
 
 
     private Vector3 GetCameraUp() => MathF.Abs(MathF.Cos(_pitch)) < 0.01f
 
-        ? (_pitch > 0 ? -Vector3.UnitZ : Vector3.UnitZ)
+        ? (_pitch > 0 ? -Vector3.UnitY : Vector3.UnitY)
 
-        : Vector3.UnitY;
+        : Vector3.UnitZ;
 
 
 
@@ -2330,7 +2350,7 @@ public sealed class GlViewport : OpenGlControlBase
 
         var view = Matrix4x4.CreateLookAt(GetEye(), _target, GetCameraUp());
 
-        return new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ }.Select(axis =>
+        return new[] { -Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ }.Select(axis =>
 
         {
 
@@ -2416,7 +2436,7 @@ public sealed class GlViewport : OpenGlControlBase
         {
         _lineVerts.Clear();
 
-        var modelSize = MathF.Max(0.1f, MathF.Max(_boundsMax.X - _boundsMin.X, _boundsMax.Z - _boundsMin.Z));
+        var modelSize = MathF.Max(0.1f, MathF.Max(_boundsMax.X - _boundsMin.X, _boundsMax.Y - _boundsMin.Y));
 
         var exponent = MathF.Floor(MathF.Log10(modelSize));
 
@@ -2434,9 +2454,9 @@ public sealed class GlViewport : OpenGlControlBase
 
         {
 
-            AddLineVertex(new Vector3(v, 0, -extent)); AddLineVertex(new Vector3(v, 0, extent));
+            AddLineVertex(new Vector3(v, -extent, 0)); AddLineVertex(new Vector3(v, extent, 0));
 
-            AddLineVertex(new Vector3(-extent, 0, v)); AddLineVertex(new Vector3(extent, 0, v));
+            AddLineVertex(new Vector3(-extent, v, 0)); AddLineVertex(new Vector3(extent, v, 0));
 
             lineIndex++;
 
@@ -2448,11 +2468,13 @@ public sealed class GlViewport : OpenGlControlBase
 
 
 
-        // XYZ origin triad, drawn separately with conventional DCC colors.
-
-        AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(extent * 0.35f, 0, 0));
+        // UE-facing origin triad. In this tool's target convention the character/world
+        // forward axis is Y, so draw the forward ground axis as green Y and the side
+        // ground axis as red X.
 
         AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(0, extent * 0.35f, 0));
+
+        AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(-extent * 0.35f, 0, 0));
 
         AddLineVertex(Vector3.Zero); AddLineVertex(new Vector3(0, 0, extent * 0.35f));
 
@@ -2508,9 +2530,9 @@ public sealed class GlViewport : OpenGlControlBase
 
                 if (parent < 0 || parent >= globals.Length) continue;
 
-                AddLineVertex(globals[parent].Translation);
+                AddLineVertex(Vector3.Transform(globals[parent].Translation, ReToUeWorld));
 
-                AddLineVertex(globals[bi].Translation);
+                AddLineVertex(Vector3.Transform(globals[bi].Translation, ReToUeWorld));
 
             }
 
@@ -2571,18 +2593,20 @@ public sealed class GlViewport : OpenGlControlBase
         if (ShowAxes)
 
         {
+            g.LineWidth(3f);
 
-            g.Uniform4(_lColor, 0.9f, 0.18f, 0.18f, 1f); // X red
+            g.Uniform4(_lColor, 0.2f, 0.78f, 0.3f, 1f);  // Y green = forward
 
             g.DrawArrays(PrimitiveType.Lines, _gridLineCount, 2);
 
-            g.Uniform4(_lColor, 0.2f, 0.78f, 0.3f, 1f);  // Y green
+            g.Uniform4(_lColor, 0.9f, 0.18f, 0.18f, 1f); // X red = side
 
             g.DrawArrays(PrimitiveType.Lines, _gridLineCount + 2, 2);
 
             g.Uniform4(_lColor, 0.25f, 0.48f, 1f, 1f);   // Z blue
 
             g.DrawArrays(PrimitiveType.Lines, _gridLineCount + 4, 2);
+            g.LineWidth(1f);
             CaptureLineError(g, "DrawAxes");
 
         }

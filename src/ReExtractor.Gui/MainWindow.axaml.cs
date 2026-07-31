@@ -837,7 +837,19 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (!pointer.IsLeftButtonPressed || e.ClickCount < 2)
             return;
 
-        var path = sender switch
+        var clickedRow = (e.Source as Control)?.DataContext;
+        var clickedPath = clickedRow switch
+        {
+            FileTreeNode clickedNode => clickedNode.FilePath,
+            EntryRow clickedEntry => clickedEntry.Path,
+            _ => null,
+        };
+        if (sender is TreeView && clickedRow is FileTreeNode treeNode)
+            FileTree.SelectedItem = treeNode;
+        else if (sender is ListBox && clickedRow is EntryRow listEntry)
+            SearchResults.SelectedItem = listEntry;
+
+        var path = clickedPath ?? sender switch
         {
             TreeView => (FileTree.SelectedItem as FileTreeNode)?.FilePath,
             ListBox => (SearchResults.SelectedItem as EntryRow)?.Path,
@@ -884,7 +896,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void OnViewportPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Control input || !Viewport.HasMesh) return;
+        if (sender is not Control input) return;
         input.Focus();
         var point = e.GetCurrentPoint(input);
         if (point.Properties.IsLeftButtonPressed && VisconGroupList.SelectedItem != null)
@@ -923,14 +935,12 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void OnViewportPointerWheelChanged(object? sender, PointerWheelEventArgs e)
     {
-        if (!Viewport.HasMesh) return;
         Viewport.ZoomCamera(e.Delta.Y);
         e.Handled = true;
     }
 
     private void OnViewportKeyDown(object? sender, KeyEventArgs e)
     {
-        if (!Viewport.HasMesh) return;
         e.Handled = Viewport.HandleCameraKey(e.Key);
         if (e.Handled) UpdateViewportChrome();
     }
@@ -1057,15 +1067,16 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     {
         if (WorldAxisX is null || WorldAxisY is null || WorldAxisZ is null) return;
         var directions = Viewport.GetWorldAxisScreenDirections();
-        const double origin = 45;
-        const double length = 29;
+        const double originX = 45;
+        const double originY = 58;
+        const double length = 32;
         var lines = new[] { WorldAxisX, WorldAxisY, WorldAxisZ };
         var labels = new[] { WorldAxisXLabel, WorldAxisYLabel, WorldAxisZLabel };
         for (var i = 0; i < 3; i++)
         {
-            var x = origin + directions[i].X * length;
-            var y = origin + directions[i].Y * length;
-            lines[i].StartPoint = new Avalonia.Point(origin, origin);
+            var x = originX + directions[i].X * length;
+            var y = originY + directions[i].Y * length;
+            lines[i].StartPoint = new Avalonia.Point(originX, originY);
             lines[i].EndPoint = new Avalonia.Point(x, y);
             Canvas.SetLeft(labels[i], Math.Clamp(x + (directions[i].X >= 0 ? 3 : -12), 2, 78));
             Canvas.SetTop(labels[i], Math.Clamp(y - 9, 1, 72));

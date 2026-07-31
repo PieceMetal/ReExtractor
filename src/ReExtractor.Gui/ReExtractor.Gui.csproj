@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
     <Authors>PieceMetal</Authors>
     <Description>RE Engine 资源解包、预览与 FBX 导出工具</Description>
     <TargetFramework>net10.0</TargetFramework>
@@ -42,7 +42,6 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\tools\export_models_fbx.py" Link="EmbeddedTools\export_models_fbx.py" />
     <EmbeddedResource Include="..\..\tools\export_animations_fbx.py" Link="EmbeddedTools\export_animations_fbx.py" />
-    <EmbeddedResource Include="BundledFileLists\*.list" Link="EmbeddedFileLists\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <Target Name="RemovePublishSymbols" AfterTargets="Publish">

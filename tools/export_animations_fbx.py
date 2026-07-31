@@ -27,9 +27,11 @@ def action_frame_range():
     starts = []
     ends = []
     for action in bpy.data.actions:
-        if not action.fcurves:
-            continue
+        # Blender 5.x moved animation data internals; Action.fcurves is not
+        # guaranteed to exist. frame_range remains the stable export boundary.
         start, end = action.frame_range
+        if end < start:
+            continue
         starts.append(float(start))
         ends.append(float(end))
     if not starts:
@@ -77,9 +79,9 @@ for index, source in enumerate(inputs, start=1):
     armatures = [primary]
 
     start_frame, end_frame = action_frame_range()
-    scene.frame_start = start_frame
-    scene.frame_end = end_frame
-    scene.frame_set(start_frame)
+    scene.frame_start = int(start_frame)
+    scene.frame_end = int(end_frame)
+    scene.frame_set(int(start_frame))
 
     bpy.ops.object.select_all(action="DESELECT")
     for armature in armatures:
@@ -99,12 +101,14 @@ for index, source in enumerate(inputs, start=1):
         bake_anim_use_all_bones=True,
         bake_anim_step=1.0,
         bake_anim_simplify_factor=0.0,
-        bake_anim_start=start_frame,
-        bake_anim_end=end_frame,
         add_leaf_bones=False,
         global_scale=1.0,
         apply_scale_options="FBX_SCALE_NONE",
-        use_space_transform=True,
+        axis_forward="Y",
+        axis_up="Z",
+        use_space_transform=False,
+        primary_bone_axis="Z",
+        secondary_bone_axis="X",
         armature_nodetype="NULL",
     )
     print(f"REEXTRACTOR_OK:{output_path}")

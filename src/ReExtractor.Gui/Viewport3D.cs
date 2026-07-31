@@ -44,10 +44,20 @@ public sealed class Viewport3D : Control
     public bool BackfaceCulling { get; set; } = false;
 
     // camera
-    private float _yaw = 0.7f, _pitch = 0.35f, _dist = 2.0f;
+    private const float DefaultYaw = -1.1f;
+    private const float DefaultPitch = 0.35f;
+    private float _yaw = DefaultYaw, _pitch = DefaultPitch, _dist = 2.0f;
     private Vector3 _target = Vector3.Zero;
     private Point _lastPointer;
     private bool _orbiting, _panning;
+
+    // Internal animation/skinning stays in RE basis; viewport displays in UE basis
+    // (X right, Y forward, Z up).
+    private static readonly Matrix4x4 ReToUeWorld = new(
+        -1, 0, 0, 0,
+        0, 0, 1, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1);
 
     // playback
     private readonly DispatcherTimer _timer;
@@ -570,9 +580,12 @@ public sealed class Viewport3D : Control
     {
         var eye = _target + new Vector3(
             MathF.Cos(_pitch) * MathF.Sin(_yaw),
-            MathF.Sin(_pitch),
-            MathF.Cos(_pitch) * MathF.Cos(_yaw)) * _dist;
-        var view = Matrix4x4.CreateLookAt(eye, _target, Vector3.UnitY);
+            MathF.Cos(_pitch) * MathF.Cos(_yaw),
+            MathF.Sin(_pitch)) * _dist;
+        var up = MathF.Abs(MathF.Cos(_pitch)) < 0.01f
+            ? (_pitch > 0 ? -Vector3.UnitY : Vector3.UnitY)
+            : Vector3.UnitZ;
+        var view = Matrix4x4.CreateLookAt(eye, _target, up);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 4, aspect, _dist * 0.01f, _dist * 20f);
         return (view, proj);
     }
@@ -686,7 +699,8 @@ public sealed class Viewport3D : Control
         var fbw = _fbW; var fbh = _fbH;
         Parallel.For(0, vc, i =>
         {
-            var c = Vector4.Transform(new Vector4(posed[i], 1f), vp);
+            var world = Vector3.Transform(posed[i], ReToUeWorld);
+            var c = Vector4.Transform(new Vector4(world, 1f), vp);
             if (c.W <= 1e-6f) { sz[i] = float.NaN; return; }
             var inv = 1f / c.W;
             sx[i] = (c.X * inv * 0.5f + 0.5f) * fbw;
@@ -889,7 +903,7 @@ public sealed class Viewport3D : Control
         }
     }
 
-    /// <summary>Ground grid at y=0 (drawn before skeleton, depth-tested against geometry).</summary>
+    /// <summary>UE-style ground grid at z=0 (X/Y plane, Z up), drawn before skeleton.</summary>
     private void DrawGridOverlay()
     {
         var (view, proj) = CameraMatrices(_fbW / (float)_fbH);
@@ -901,8 +915,8 @@ public sealed class Viewport3D : Control
 
         for (var v = -extent; v <= extent + 1e-4f; v += step)
         {
-            DrawGridLine(color, depth, vp, new Vector3(v, 0, -extent), new Vector3(v, 0, extent), gridColor);
-            DrawGridLine(color, depth, vp, new Vector3(-extent, 0, v), new Vector3(extent, 0, v), gridColor);
+            DrawGridLine(color, depth, vp, new Vector3(v, -extent, 0), new Vector3(v, extent, 0), gridColor);
+            DrawGridLine(color, depth, vp, new Vector3(-extent, v, 0), new Vector3(extent, v, 0), gridColor);
         }
     }
 
@@ -995,8 +1009,8 @@ public sealed class Viewport3D : Control
         {
             var bone = mesh.Bones[bi];
             if (bone.ParentIndex < 0 || bone.ParentIndex >= globals.Length) continue;
-            var p0 = Project(globals[bone.ParentIndex].Translation, vp);
-            var p1 = Project(globals[bi].Translation, vp);
+            var p0 = Project(Vector3.Transform(globals[bone.ParentIndex].Translation, ReToUeWorld), vp);
+            var p1 = Project(Vector3.Transform(globals[bi].Translation, ReToUeWorld), vp);
             if (p0 == null || p1 == null) continue;
             DrawLine3D(color, depth, p0.Value, p1.Value, lineColor);
         }
@@ -1068,7 +1082,7 @@ public sealed class Viewport3D : Control
         {
             if (_orbiting)
             {
-                _yaw -= dx * 0.01f;
+                _yaw += dx * 0.01f;
                 _pitch = Math.Clamp(_pitch + dy * 0.01f, -1.5f, 1.5f);
                 changed = true;
             }
