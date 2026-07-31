@@ -2,6 +2,10 @@
 
 ![ReExtractor 图标](src/ReExtractor.Gui/Assets/AppIcon.png)
 
+## [⬇ 下载 ReExtractor v1.0.0（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.0.0-win-x64.zip)
+
+> 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
+
 ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载游戏 PAK，配合路径 list 浏览资源，并预览、提取、合并和导出模型、贴图、骨架与动画。
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
