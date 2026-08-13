@@ -1387,19 +1387,22 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
             ShowViewport();
             SetPreviewMeshPaths(paths);
-            var allSame = meshes.Length > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
-            if (allSame)
-            {
-                Viewport.SetMesh(ViewportMesh.Merge(meshes));
-            }
-            else
-            {
-                Viewport.SetMesh(meshes[0]);
-                for (var i = 1; i < meshes.Length; i++)
-                    Viewport.AddMesh(meshes[i], paths[i].Split('/')[^1]);
-            }
+            // Keep the topology chosen by the user: a right-click assembled scene has
+            // independent extras, while a merge-queue scene has one merged primary.
+            // Rebuilding through SetMesh/AddMesh would clear the animation and restart
+            // the scene in bind pose, which made texture loading appear to break motion.
+            var preserveOverlayLayout = Viewport.ExtraModelCount > 0;
+            var shouldMerge = !preserveOverlayLayout &&
+                              meshes.Length > 1 &&
+                              meshes.All(m => SameSkeleton(meshes[0], m));
+            Viewport.ReplaceSceneMeshes(meshes, shouldMerge);
             RefreshVisconGroups();
-            ActionStatus.Text = $"贴图已加载 | {Viewport.StatusInfo}";
+            var textureCount = meshes.Sum(mesh => mesh.Textures.Length);
+            ActionStatus.Text = textureCount > 0
+                ? Viewport.HasAnimation
+                    ? $"贴图已加载（{textureCount} 张），动画与当前组装姿势已保留 | {Viewport.StatusInfo}"
+                    : $"贴图已加载（{textureCount} 张） | {Viewport.StatusInfo}"
+                : "未找到可解码贴图：请检查 MDF/tex 路径与版本后重试";
         }
         catch (Exception ex)
         {
@@ -2055,6 +2058,10 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             ShowViewport();
             if (Viewport.HasMesh)
             {
+                // Do not infer that every mesh under one character directory has a compatible
+                // skeleton. DMC5 body/head/hair variants can use different bind skeletons;
+                // merging them corrupts the animated pose. Keep right-click overlay as a
+                // non-destructive independent model operation.
                 Viewport.AddMesh(vm, path.Split('/')[^1]);
                 if (!_previewMeshPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
                     _previewMeshPaths.Add(path);
@@ -2372,11 +2379,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             // smart check: if every queued model shares the same bone-name set, geometrically
             // merge into ONE mesh and play a single animation (Noesis-style, same character parts);
             // otherwise load the first as primary and the rest as independent animated extras.
-            var allSame = meshes.Length > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
+            var shouldMerge = meshes.Length > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
             ShowViewport();
             SetPreviewMeshPaths(paths);
             ClearMotionState();
-            if (allSame)
+            if (shouldMerge)
             {
                 var merged = ViewportMesh.Merge(meshes);
                 Viewport.SetMesh(merged);
@@ -2389,7 +2396,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 RefreshVisconGroups();
                 for (var i = 1; i < meshes.Length; i++)
                     Viewport.AddMesh(meshes[i], paths[i].Split('/')[^1]);
-                var verb = meshes.Length > 1 ? $"已加载 {meshes.Length} 个模型（未加载贴图，骨骼不同 → 各自独立动画）" : "模型已加载（未加载贴图）";
+                var verb = meshes.Length > 1 ? $"已加载 {meshes.Length} 个模型（未加载贴图，骨骼不同 → 按主模型同步动画）" : "模型已加载（未加载贴图）";
                 ActionStatus.Text = $"{verb} | 导出包含全部 {paths.Length} 个源模型 | {Viewport.StatusInfo}";
             }
         }

@@ -292,17 +292,20 @@ public sealed class GlViewport : OpenGlControlBase
 
     }
 
-    public string[] AllMeshBoneNames => (_primary == null
-
-        ? Enumerable.Empty<string>()
-
-        : _primary.Mesh.Bones.Select(b => b.Name)
-
-            .Concat(_extras.SelectMany(model => model.Mesh.Bones.Select(b => b.Name))))
-
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-
-        .ToArray();
+    /// <summary>
+    /// Bone names used to decode a motlist.  Use the most complete loaded skeleton,
+    /// not a concatenated list whose first duplicate wins the bone-hash mapping.
+    /// Right-click overlay order can start with a small partial mesh; decoding against
+    /// that mesh drops tracks for bones that only exist in the later full-body part.
+    /// </summary>
+    public string[] AllMeshBoneNames
+    {
+        get
+        {
+            var driver = GetPoseDriver();
+            return driver?.Mesh.Bones.Select(bone => bone.Name).ToArray() ?? [];
+        }
+    }
 
 
 
@@ -375,6 +378,56 @@ public sealed class GlViewport : OpenGlControlBase
 
 
 
+    /// <summary>
+    /// Replace the current scene with the same mesh layout after reloading textures.
+    /// Animation clip, current time, playback state, and overlay topology are preserved.
+    /// </summary>
+    public void ReplaceSceneMeshes(IReadOnlyList<ViewportMesh> meshes, bool merge)
+    {
+        if (meshes.Count == 0) return;
+
+        var clip = _clip;
+        var time = clip == null ? 0f : Math.Clamp(_time, 0, clip.Duration);
+        var wasPlaying = _playing;
+        StopPlayback();
+
+        var primaryMesh = merge && meshes.Count > 1
+            ? ViewportMesh.Merge(meshes)
+            : meshes[0];
+        var primary = CreateModel(primaryMesh, isPrimary: true);
+        var extras = new List<GlModel>();
+        if (!merge)
+        {
+            for (var i = 1; i < meshes.Count; i++)
+                extras.Add(CreateModel(meshes[i], isPrimary: false));
+        }
+
+        lock (_sceneLock)
+        {
+            _primary = primary;
+            _extras.Clear();
+            _extras.AddRange(extras);
+        }
+
+        _clip = clip;
+        _time = time;
+        _primary.Tracks = BuildTrackMap(_primary);
+        foreach (var extra in _extras) extra.Tracks = BuildTrackMap(extra);
+        if (_clip != null)
+            EvaluateAllPose(_time);
+
+        RecalculateVisibleBounds();
+        _target = (_boundsMin + _boundsMax) * 0.5f;
+        BuildGridLines();
+        FitCamera();
+        UpdateStatusInfo();
+        if (wasPlaying && _clip != null && _clip.Duration > 0) StartPlayback();
+        else RequestNextFrameRendering();
+        StateChanged?.Invoke();
+    }
+
+
+
     public void AddMesh(ViewportMesh mesh, string name)
 
     {
@@ -383,8 +436,14 @@ public sealed class GlViewport : OpenGlControlBase
 
         model.Tracks = BuildTrackMap(model);
 
+        // Add first so a newly added, more complete skeleton can become the pose driver.
+        // Right-click overlay order is arbitrary; the first selected part may be a small
+        // arm/head mesh and must not drive a full-body animation.
         lock (_sceneLock)
             _extras.Add(model);
+
+        if (_clip != null)
+            EvaluateAllPose(_time);
 
         RecalculateVisibleBounds();
 
@@ -412,20 +471,48 @@ public sealed class GlViewport : OpenGlControlBase
 
         foreach (var extra in _extras) extra.Tracks = BuildTrackMap(extra);
 
-        if (clip != null)
-
-        {
-
-            if (_primary != null) EvaluatePose(_primary, 0);
-
-            foreach (var extra in _extras) EvaluatePose(extra, 0);
-
-        }
-
-        if (clip != null && clip.Duration > 0) StartPlayback(); else StopPlayback();
+        if (clip != null && clip.Duration > 0) PlayFromStart(); else StopPlayback();
 
         StateChanged?.Invoke();
 
+    }
+
+
+
+    private GlModel? GetPoseDriver()
+    {
+        GlModel? driver = _primary;
+        foreach (var extra in _extras)
+        {
+            if (driver == null || extra.Mesh.Bones.Length > driver.Mesh.Bones.Length)
+                driver = extra;
+        }
+        return driver;
+    }
+
+    private void EvaluateAllPose(float time)
+    {
+        var driver = GetPoseDriver();
+        if (driver == null) return;
+
+        EvaluatePose(driver, time);
+        if (!ReferenceEquals(driver, _primary) && _primary != null)
+            EvaluatePose(_primary, time);
+        foreach (var extra in _extras)
+            if (!ReferenceEquals(extra, driver)) EvaluatePose(extra, time);
+    }
+
+
+
+    /// <summary>Restart the current animation at frame zero and enter playback.</summary>
+    public void PlayFromStart()
+    {
+        if (_clip == null || _clip.Duration <= 0) return;
+
+        _time = 0;
+        EvaluateAllPose(_time);
+        StartPlayback();
+        RequestNextFrameRendering();
     }
 
 
@@ -453,9 +540,7 @@ public sealed class GlViewport : OpenGlControlBase
 
         _time = Math.Clamp(time, 0, _clip.Duration);
 
-        if (_primary != null) EvaluatePose(_primary, _time);
-
-        foreach (var extra in _extras) EvaluatePose(extra, _time);
+        EvaluateAllPose(_time);
 
         RequestNextFrameRendering();
 
@@ -908,9 +993,7 @@ public sealed class GlViewport : OpenGlControlBase
 
         if (_time >= _clip.Duration) _time %= _clip.Duration;
 
-        EvaluatePose(_primary, _time);
-
-        foreach (var extra in _extras) EvaluatePose(extra, _time);
+        EvaluateAllPose(_time);
 
         RequestNextFrameRendering();
 
@@ -1609,10 +1692,22 @@ public sealed class GlViewport : OpenGlControlBase
         if (bones.Length == 0 || _clip == null) return;
 
         var computed = new bool[bones.Length];
+        var driver = GetPoseDriver();
 
-        for (var b = 0; b < bones.Length; b++)
+        if (driver != null && !ReferenceEquals(model, driver))
+        {
+            var driverByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < driver.Mesh.Bones.Length; i++)
+                driverByName.TryAdd(driver.Mesh.Bones[i].Name, i);
 
-            ComputeGlobal(model, b, computed, time);
+            for (var b = 0; b < bones.Length; b++)
+                ComputeOverlayGlobal(model, b, computed, time, driver, driverByName);
+        }
+        else
+        {
+            for (var b = 0; b < bones.Length; b++)
+                ComputeGlobal(model, b, computed, time);
+        }
 
 
 
@@ -1674,6 +1769,47 @@ public sealed class GlViewport : OpenGlControlBase
 
         });
 
+    }
+
+
+
+    private void ComputeOverlayGlobal(
+        GlModel model,
+        int b,
+        bool[] computed,
+        float time,
+        GlModel primary,
+        IReadOnlyDictionary<string, int> primaryByName)
+
+    {
+        if (computed[b]) return;
+
+        var bone = model.Mesh.Bones[b];
+        if (primaryByName.TryGetValue(bone.Name, out var primaryIndex))
+        {
+            // The primary model owns the authoritative animated hierarchy.  This is
+            // what keeps a partial head/hair/body overlay on the same neck/root pose.
+            model.BoneGlobals[b] = primary.BoneGlobals[primaryIndex];
+            computed[b] = true;
+            return;
+        }
+
+        var local = bone.LocalBind;
+        if (model.Tracks != null && model.Tracks.TryGetValue(b, out var track))
+            local = EvaluateLocal(track, time, local);
+
+        var parent = bone.ParentIndex;
+        if (parent >= 0)
+        {
+            ComputeOverlayGlobal(model, parent, computed, time, primary, primaryByName);
+            model.BoneGlobals[b] = local * model.BoneGlobals[parent];
+        }
+        else
+        {
+            model.BoneGlobals[b] = local;
+        }
+
+        computed[b] = true;
     }
 
 
@@ -2272,6 +2408,20 @@ public sealed class GlViewport : OpenGlControlBase
 
 
 
+    private static int GetAlphaCutoutMode(ViewportTexture texture)
+    {
+        // Hair-card alpha is a coverage mask with a large population of mid-alpha
+        // texels. A 0.25 threshold turns the beard into a grey dotted stencil at
+        // distance; keep coverage down to 0.1 so mip-filtered strands remain visible.
+        if (texture.Name.Contains("hair", StringComparison.OrdinalIgnoreCase) ||
+            texture.Name.Contains("eyebrow", StringComparison.OrdinalIgnoreCase) ||
+            texture.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase) ||
+            texture.Name.Contains("eyeduct", StringComparison.OrdinalIgnoreCase) ||
+            texture.Name.Contains("eyeshadow", StringComparison.OrdinalIgnoreCase) ||
+            texture.Name.Contains("beard", StringComparison.OrdinalIgnoreCase)) return 3;
+        return 1;
+    }
+
     private void DrawModel(GL g, GlModel model, Matrix4x4 mvp)
 
     {
@@ -2334,7 +2484,10 @@ public sealed class GlViewport : OpenGlControlBase
 
                 g.Uniform1(_uHasTex, tex != 0 ? 1 : 0);
 
-                g.Uniform1(_uAlphaCutout, alphaCutout && tex != 0 ? 1 : 0);
+                var alphaMode = alphaCutout && tex != 0
+                    ? GetAlphaCutoutMode(model.Mesh.Textures[slot])
+                    : 0;
+                g.Uniform1(_uAlphaCutout, alphaMode);
 
                 if (tex != 0)
 
@@ -2810,7 +2963,8 @@ public sealed class GlViewport : OpenGlControlBase
 
             vec4 texel = (uHasTex == 1 && uRenderMode != 2) ? texture(uTex, vUV) : vec4(0.62, 0.66, 0.72, 1.0);
 
-            if (uAlphaCutout == 1 && uRenderMode != 2 && texel.a < 0.5) discard;
+            if (uAlphaCutout > 0 && uRenderMode != 2 &&
+                texel.a < (uAlphaCutout == 3 ? 0.1 : uAlphaCutout == 2 ? 0.25 : 0.5)) discard;
 
             vec3 baseSrgb = texel.rgb;
 

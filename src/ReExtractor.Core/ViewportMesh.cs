@@ -555,41 +555,68 @@ public static class ViewportDataLoader
                     atlasQuadrant = !albedoPath.Equals(wrinkle.texPath, StringComparison.OrdinalIgnoreCase);
                 }
             }
-            if (string.IsNullOrEmpty(albedoPath)) continue;
+            var baseColor = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("BaseColor", StringComparison.OrdinalIgnoreCase))?.parameter ?? Vector4.One;
+            var fallbackTexture = false;
+            if (string.IsNullOrEmpty(albedoPath))
+            {
+                if (!mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase)) continue;
+                fallbackTexture = true;
+            }
+            else if (IsNullTexture(albedoPath))
+            {
+                if (!mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase)) continue;
+                fallbackTexture = true;
+            }
 
-            using var texStream = OpenNormalized(openResource, albedoPath);
-            if (texStream == null) continue;
+            using var texStream = fallbackTexture ? null : OpenNormalized(openResource, albedoPath!, meshPath);
+            if (!fallbackTexture && texStream == null) continue;
             try
             {
+                var isEyeMaterial = mat.Name.Equals("m_eye", StringComparison.OrdinalIgnoreCase) ||
+                    mat.Name.Contains("eyeball", StringComparison.OrdinalIgnoreCase);
                 var flags = mat.Header.Flags;
                 var alphaCutout = (flags & (MaterialFlags.BaseAlphaTestEnable |
                     MaterialFlags.ForcedAlphaTestEnable | MaterialFlags.AlphaTestEnable)) != 0;
                 // Some older assets expose the convention only through their material name.
                 // Keep that as a compatibility fallback, but prefer the MDF's authoritative flags.
-                alphaCutout |= mat.Name.Contains("ALP", StringComparison.OrdinalIgnoreCase);
+                alphaCutout |= mat.Name.Contains("ALP", StringComparison.OrdinalIgnoreCase) ||
+                    IsAlphaCutoutMaterial(mat);
 
-                var texture = DecodeTexture(texStream, albedoPath, atlasQuadrant);
-                var baseColor = mat.Parameters.FirstOrDefault(parameter =>
-                    parameter.paramName.Equals("BaseColor", StringComparison.OrdinalIgnoreCase))?.parameter ?? Vector4.One;
+                var texture = fallbackTexture
+                    ? CreateSolidTexture(baseColor, mat.Name)
+                    : DecodeTexture(texStream!, albedoPath!, atlasQuadrant);
                 ApplyBaseColor(texture, baseColor);
-                ApplyCustomizeColorMasks(texture, mat, openResource);
+                ApplyCustomizeColorMasks(texture, mat, openResource, meshPath);
                 var eyeColor = mat.Parameters.FirstOrDefault(parameter =>
                     parameter.paramName.Equals("Eye_ColorChange", StringComparison.OrdinalIgnoreCase))?.parameter;
                 if (eyeColor.HasValue) ApplyEyeColorChange(texture, eyeColor.Value);
+                if (isEyeMaterial)
+                {
+                    // DMC5 eye ALBM stores color in RGB while its alpha channel is zero
+                    // throughout; the game eye shader treats that channel as an internal
+                    // mask, not surface coverage. Leaving it in the generic alpha-cutout
+                    // path discards the entire eyeball in the preview.
+                    ForceOpaqueAlpha(texture);
+                    alphaCutout = false;
+                }
                 // Material color parameters can differ even when multiple materials reuse the
                 // same source ALBD image. Keep those baked variants distinct during scene merge.
-                texture.Name = $"{mat.Name}_{Path.GetFileName(albedoPath)}";
+                texture.Name = fallbackTexture
+                    ? $"{mat.Name}_fallback"
+                    : $"{mat.Name}_{Path.GetFileName(albedoPath!)}";
 
                 // RE hair cards commonly store coverage in a separate AlphaMap. Folding that
                 // mask into the exported/preview RGBA texture prevents eyebrow and beard cards
-                // from appearing as solid white or grey polygons.
+                // from appearing as solid white or grey polygons. Do not use the packed
+                // AlphaTranslucentOcclusionSSSMap as coverage; its red channel makes DMC5
+                // hair sparse and makes the eye texture disappear in patches.
                 var alphaHeader = mat.Textures.FirstOrDefault(candidate =>
-                    (candidate.texType.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) ||
-                     candidate.texType.Equals("AlphaTranslucentOcclusionSSSMap", StringComparison.OrdinalIgnoreCase)) &&
+                    candidate.texType.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) &&
                     !IsNullTexture(candidate.texPath));
                 if (alphaHeader != null)
                 {
-                    using var alphaStream = OpenNormalized(openResource, alphaHeader.texPath);
+                    using var alphaStream = OpenNormalized(openResource, alphaHeader.texPath, meshPath);
                     if (alphaStream != null)
                     {
                         var alphaAdjust = mat.Parameters.FirstOrDefault(parameter =>
@@ -637,14 +664,15 @@ public static class ViewportDataLoader
         while (end > 0 && char.IsDigit(name[end - 1])) end--;
         return name[..end];
     }
-    private static void ApplyCustomizeColorMasks(ViewportTexture texture, MaterialData mat, Func<string, Stream?> openResource)
+    private static void ApplyCustomizeColorMasks(ViewportTexture texture, MaterialData mat,
+        Func<string, Stream?> openResource, string meshPath)
     {
-        ApplyCustomizeColorMask(texture, mat, openResource, "CustomizeColor_Mask", 0);
-        ApplyCustomizeColorMask(texture, mat, openResource, "CustomizeColor_Mask2", 4);
+        ApplyCustomizeColorMask(texture, mat, openResource, meshPath, "CustomizeColor_Mask", 0);
+        ApplyCustomizeColorMask(texture, mat, openResource, meshPath, "CustomizeColor_Mask2", 4);
     }
 
     private static void ApplyCustomizeColorMask(ViewportTexture texture, MaterialData mat,
-        Func<string, Stream?> openResource, string slotName, int colorOffset)
+        Func<string, Stream?> openResource, string meshPath, string slotName, int colorOffset)
     {
         var maskHeader = mat.Textures.FirstOrDefault(candidate =>
             candidate.texType.Equals(slotName, StringComparison.OrdinalIgnoreCase) &&
@@ -666,7 +694,7 @@ public static class ViewportDataLoader
         }
         if (!hasAnyColor) return;
 
-        using var maskStream = OpenNormalized(openResource, maskHeader.texPath);
+        using var maskStream = OpenNormalized(openResource, maskHeader.texPath, meshPath);
         if (maskStream == null) return;
         using var mask = new TexService().DecodeToImage(maskStream, maskHeader.texPath);
         if (mask.Width != texture.Width || mask.Height != texture.Height)
@@ -732,6 +760,13 @@ public static class ViewportDataLoader
         BuildMipChain(texture);
     }
 
+    private static void ForceOpaqueAlpha(ViewportTexture texture)
+    {
+        for (var i = 0; i < texture.Pixels.Length; i++)
+            texture.Pixels[i] = texture.Pixels[i] | 0xFF000000u;
+        BuildMipChain(texture);
+    }
+
     private static void ApplyEyeColorChange(ViewportTexture texture, Vector4 eyeColor)
     {
         var tintR = Math.Clamp(eyeColor.X, 0f, 1f);
@@ -775,6 +810,21 @@ public static class ViewportDataLoader
         });
         BuildMipChain(texture);
     }
+    private static bool IsAlphaCutoutMaterial(MaterialData mat)
+    {
+        if (mat.Name.Contains("hair", StringComparison.OrdinalIgnoreCase) ||
+            mat.Name.Contains("eyebrow", StringComparison.OrdinalIgnoreCase) ||
+            mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase) ||
+            mat.Name.Contains("eyeduct", StringComparison.OrdinalIgnoreCase) ||
+            mat.Name.Contains("eyeshadow", StringComparison.OrdinalIgnoreCase) ||
+            mat.Name.Contains("beard", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return mat.Textures.Any(texture =>
+            texture.texType.Equals("BaseShiftMap", StringComparison.OrdinalIgnoreCase) ||
+            texture.texType.Equals("BaseAlphaMap", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool IsBaseColorSlot(string type, string path)
     {
         var derived = type.Contains("Wrinkle", StringComparison.OrdinalIgnoreCase) ||
@@ -789,6 +839,8 @@ public static class ViewportDataLoader
                type.Equals("AlbedoMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAlbedoMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseColor", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseMetalMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseShiftMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAnisoShiftMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAlphaMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("ALBD", StringComparison.OrdinalIgnoreCase);
@@ -801,7 +853,7 @@ public static class ViewportDataLoader
          ".mdf2.23", ".mdf2.21", ".mdf2.19", ".mdf2.13", ".mdf2.10", ".mdf2.6"];
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
     private static readonly string[] TexVersionCandidates =
-        [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018"];
+        [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];
 
     /// <summary>
     /// mdf texPath is relative ("Art/Model/.../x_ALBD.tex") and lacks natives prefix + version suffix.
@@ -810,23 +862,57 @@ public static class ViewportDataLoader
     /// only has 256px stubs whose BC grain renders as speckle at preview zoom. fmt_RE_MESH
     /// resolves streaming first — do the same.
     /// </summary>
-    private static Stream? OpenNormalized(Func<string, Stream?> open, string texPath)
+    private static Stream? OpenNormalized(Func<string, Stream?> open, string texPath, string? meshPath = null)
     {
-        var p = texPath.Replace('\\', '/').TrimStart('/');
-        if (!p.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
-            p = "natives/stm/" + p;
+        var raw = texPath.Replace('\\', '/').TrimStart('/');
+        if (raw.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
+            return OpenVersioned(open, raw);
 
-        // already has numeric version suffix?
+        // MDF texture paths are relative and the native root is game-specific. DMC5
+        // stores them under natives/x64, while RE Engine STM games use natives/stm.
+        // Derive the root from the mesh first, then keep stm/x64 fallbacks for mixed PAKs.
+        var roots = new List<string>();
+        if (meshPath is { Length: > 0 })
+        {
+            var normalizedMesh = meshPath.Replace('\\', '/');
+            var nativeMarker = normalizedMesh.IndexOf("natives/", StringComparison.OrdinalIgnoreCase);
+            if (nativeMarker >= 0)
+            {
+                var rootEnd = normalizedMesh.IndexOf('/', nativeMarker + "natives/".Length);
+                if (rootEnd > nativeMarker)
+                    roots.Add(normalizedMesh[..(rootEnd + 1)]);
+            }
+        }
+        roots.Add("natives/stm/");
+        roots.Add("natives/x64/");
+
+        foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var candidate = root + raw;
+            var stream = OpenVersioned(open, candidate);
+            if (stream != null) return stream;
+        }
+        return null;
+    }
+
+    private static Stream? OpenVersioned(Func<string, Stream?> open, string path)
+    {
+        var p = path.Replace('\\', '/');
         var lastDot = p.LastIndexOf('.');
         if (lastDot > 0 && p[(lastDot + 1)..].All(char.IsDigit))
             return open(p);
 
-        // streaming first (full-res), then the plain stub path
-        var streaming = p.Replace("natives/stm/", "natives/stm/streaming/");
-        foreach (var ver in TexVersionCandidates)
+        var roots = new[] { "natives/stm/", "natives/x64/" };
+        foreach (var root in roots)
         {
-            var s = open(streaming + ver);
-            if (s != null) return s;
+            var streaming = p.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                ? root + "streaming/" + p[root.Length..]
+                : p;
+            foreach (var ver in TexVersionCandidates)
+            {
+                var s = open(streaming + ver);
+                if (s != null) return s;
+            }
         }
         foreach (var ver in TexVersionCandidates)
         {
@@ -837,6 +923,22 @@ public static class ViewportDataLoader
     }
 
     private const int MaxTextureSize = 2048;
+
+    private static ViewportTexture CreateSolidTexture(Vector4 color, string name)
+    {
+        var r = (uint)Math.Clamp((int)MathF.Round(color.X * 255f), 0, 255);
+        var g = (uint)Math.Clamp((int)MathF.Round(color.Y * 255f), 0, 255);
+        var b = (uint)Math.Clamp((int)MathF.Round(color.Z * 255f), 0, 255);
+        var texture = new ViewportTexture
+        {
+            Width = 1,
+            Height = 1,
+            Pixels = [0xFF000000u | (r << 16) | (g << 8) | b],
+            Name = name,
+        };
+        BuildMipChain(texture);
+        return texture;
+    }
 
     private static ViewportTexture DecodeTexture(Stream texStream, string texPath, bool cropTopLeftQuadrant = false)
     {
@@ -921,6 +1023,8 @@ public static class ViewportDataLoader
 
     private static bool IsUnsupportedEyeOverlayMaterial(string name)
         => name.Contains("cornea", StringComparison.OrdinalIgnoreCase)
+           || name.Contains("eyeouter", StringComparison.OrdinalIgnoreCase)
+           || name.Contains("eyewet", StringComparison.OrdinalIgnoreCase)
            || name.Contains("eye_shadow", StringComparison.OrdinalIgnoreCase)
            || name.Contains("human_tear", StringComparison.OrdinalIgnoreCase);
 
@@ -1120,7 +1224,6 @@ public static class ViewportDataLoader
                 sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
                 duration = Math.Max(duration, maxFrame / fps);
             }
-
             tracks[boneIndex] = track;
             if (boneName != null) namedTracks[boneName] = track;
         }

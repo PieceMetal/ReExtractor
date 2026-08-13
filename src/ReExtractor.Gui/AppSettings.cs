@@ -26,6 +26,16 @@ public static class AppSettingsService
                 var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? CreateDefault();
                 if (string.Equals(settings.OutputDirectory, AppPaths.LegacyOutputDirectory, StringComparison.OrdinalIgnoreCase))
                     settings.OutputDirectory = AppPaths.OutputDirectory;
+                // 自动定位 Blender：首次运行或路径失效时探测并回填
+                if (string.IsNullOrWhiteSpace(settings.BlenderPath) || !File.Exists(settings.BlenderPath))
+                {
+                    var detected = BlenderLocator.Detect();
+                    if (!string.IsNullOrEmpty(detected))
+                    {
+                        settings.BlenderPath = detected;
+                        Save(settings);
+                    }
+                }
                 return settings;
             }
         }
@@ -42,8 +52,7 @@ public static class AppSettingsService
     private static AppSettings CreateDefault()
     {
         var settings = new AppSettings();
-        var knownBlender = @"E:\Steam\steamapps\common\Blender\blender.exe";
-        if (File.Exists(knownBlender)) settings.BlenderPath = knownBlender;
+        settings.BlenderPath = BlenderLocator.Detect() ?? "";
         return settings;
     }
 }

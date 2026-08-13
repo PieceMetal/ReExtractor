@@ -148,9 +148,9 @@
         <TextBlock DockPanel.Dock="Top" Text="模型与动画预览" Foreground="#aab2c0" FontWeight="SemiBold" Margin="0,0,0,7"/>
         <!-- DCC-style viewport toolbar -->
         <Border DockPanel.Dock="Top" Background="#20252d" BorderBrush="#394352" BorderThickness="1"
-                CornerRadius="6" Padding="8" Margin="0,0,0,6">
+                CornerRadius="6" Padding="8" Margin="0,0,0,6" ClipToBounds="True">
           <StackPanel Spacing="5">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*">
               <TextBlock Grid.Column="0" Text="视图" VerticalAlignment="Center" Margin="0,0,5,0"/>
               <ComboBox Grid.Column="1" x:Name="ViewCombo" Width="105" SelectedIndex="0"
                         SelectionChanged="OnViewportViewChanged">
@@ -167,7 +167,8 @@
               </ComboBox>
               <Button Grid.Column="5" x:Name="LoadTexturesButton" Content="加载贴图" Click="OnLoadTexturesClicked" Margin="8,0,0,0"
                       ToolTip.Tip="默认只加载模型；需要材质贴图时再点击"/>
-              <TextBlock Grid.Column="7" x:Name="FpsText" Text="" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#9cdcfe"/>
+              <TextBlock Grid.Column="6" x:Name="FpsText" Text="" VerticalAlignment="Center" HorizontalAlignment="Right"
+                         Margin="10,0,0,0" Foreground="#9cdcfe" TextTrimming="CharacterEllipsis"/>
             </Grid>
             <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
               <CheckBox Grid.Column="0" x:Name="GridCheck" Content="网格（G）" IsChecked="True"
@@ -178,7 +179,7 @@
                         Margin="0,0,12,0" IsCheckedChanged="OnSkeletonToggled"/>
               <TextBlock Grid.Column="4" x:Name="MotionLabel" Text="动画" VerticalAlignment="Center"
                          Margin="12,0,5,0" IsVisible="False"/>
-              <ComboBox Grid.Column="5" x:Name="MotionCombo" MinWidth="260" MaxWidth="420"
+              <ComboBox Grid.Column="5" x:Name="MotionCombo" Width="170" MinWidth="120" MaxWidth="260"
                         HorizontalAlignment="Right" SelectionChanged="OnMotionChanged"
                         IsVisible="False"/>
             </Grid>

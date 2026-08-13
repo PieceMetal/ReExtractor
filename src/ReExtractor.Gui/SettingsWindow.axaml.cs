@@ -28,6 +28,18 @@ public partial class SettingsWindow : Window
         if (files.Count > 0) BlenderPathBox.Text = files[0].Path.LocalPath;
     }
 
+    private void OnDetectBlenderClicked(object? sender, RoutedEventArgs e)
+    {
+        var detected = BlenderLocator.Detect();
+        if (string.IsNullOrWhiteSpace(detected))
+        {
+            BlenderPathBox.Text = "";
+            return;
+        }
+
+        BlenderPathBox.Text = detected;
+    }
+
     private async void OnSelectOutputClicked(object? sender, RoutedEventArgs e)
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions

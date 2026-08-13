@@ -174,8 +174,14 @@ public sealed class Viewport3D : Control
         {
             var extra = new ExtraModel { Mesh = mesh, Posed = posed, Intensities = intensities, Name = name,
                                            BoneGlobals = boneGlobals, JointMats = jointMats };
-            if (_clip != null) RemapTracksForExtra(extra);
+            if (_clip != null)
+                RemapTracksForExtra(extra);
+            // Add first so a newly added, more complete skeleton can become the pose driver.
+            // Right-click overlay order is arbitrary; a small first mesh must not drive
+            // the full-body animation of later parts.
             _extras.Add(extra);
+            if (_clip != null)
+                EvaluatePose(_time);
             if (!_playing) renderNow = true;
             else _poseDirty = true;
         }
@@ -391,10 +397,18 @@ public sealed class Viewport3D : Control
     private void EvaluatePose(float time)
     {
         if (_mesh == null || _posed == null || _jointMats == null || _clip == null) return;
+
+        EvaluatePrimaryPose(time);
+        foreach (var ex in _extras)
+            EvaluateExtraPose(ex, time);
+    }
+
+    private void EvaluatePrimaryPose(float time)
+    {
+        if (_mesh == null || _posed == null || _jointMats == null || _clip == null) return;
         var bones = _mesh.Bones;
         if (bones.Length == 0) { ApplyBindPose(); return; }
 
-        // local pose: bind pose overridden by tracks
         var globals = _boneGlobals!;
         var computed = new bool[bones.Length];
         for (var b = 0; b < bones.Length; b++)
@@ -429,8 +443,6 @@ public sealed class Viewport3D : Control
             posedN[i] = accN.LengthSquared() < 1e-8f ? n : Vector3.Normalize(accN);
         });
         ComputeIntensities();
-        // also animate all extra models (each gets independent skinning with shared clip)
-        foreach (var ex in _extras) EvaluateExtraPose(ex, time);
     }
 
     /// <summary>Evaluate skinning pose for one extra model using the current _clip (shared animation).</summary>
@@ -439,10 +451,20 @@ public sealed class Viewport3D : Control
         var mesh = extra.Mesh;
         var bones = mesh.Bones;
         if (bones.Length == 0 || extra.BoneGlobals == null || extra.JointMats == null) return;
-        // compute animated global transforms for this extra's skeleton (using name-remapped tracks)
+        // An overlay may contain only part of the character hierarchy.  Reuse the
+        // primary model's animated global transform for every same-named bone so the
+        // extra follows the exact same root/neck/hand pose instead of animating its
+        // partial hierarchy independently.
+        var primaryByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (_mesh != null)
+        {
+            for (var i = 0; i < _mesh.Bones.Length; i++)
+                primaryByName.TryAdd(_mesh.Bones[i].Name, i);
+        }
+
         var computed = new bool[bones.Length];
         for (var b = 0; b < bones.Length; b++)
-            ComputeGlobal(b, bones, extra.BoneGlobals, computed, time, extra.RemappedTracks);
+            ComputeOverlayGlobal(extra, b, computed, time, primaryByName);
         // build joint matrices
         for (var j = 0; j < mesh.DeformToBone.Length && j < extra.JointMats.Length; j++)
         {
@@ -499,6 +521,43 @@ public sealed class Viewport3D : Control
                     remapped[eb] = track;
         }
         extra.RemappedTracks = remapped;
+    }
+
+    private void ComputeOverlayGlobal(
+        ExtraModel extra,
+        int b,
+        bool[] computed,
+        float time,
+        IReadOnlyDictionary<string, int> primaryByName)
+    {
+        if (computed[b]) return;
+
+        var bone = extra.Mesh.Bones[b];
+        if (_boneGlobals != null && primaryByName.TryGetValue(bone.Name, out var primaryIndex))
+        {
+            // _boneGlobals was evaluated for the primary mesh immediately before
+            // extras in EvaluatePose, so this is the authoritative animated global.
+            extra.BoneGlobals![b] = _boneGlobals[primaryIndex];
+            computed[b] = true;
+            return;
+        }
+
+        var local = bone.LocalBind;
+        if (extra.RemappedTracks != null && extra.RemappedTracks.TryGetValue(b, out var track))
+            local = EvaluateLocal(track, time, local);
+
+        var parent = bone.ParentIndex;
+        if (parent >= 0)
+        {
+            ComputeOverlayGlobal(extra, parent, computed, time, primaryByName);
+            extra.BoneGlobals![b] = local * extra.BoneGlobals[parent];
+        }
+        else
+        {
+            extra.BoneGlobals![b] = local;
+        }
+
+        computed[b] = true;
     }
 
     private void ComputeGlobal(int b, ViewportBone[] bones, Matrix4x4[] globals, bool[] computed, float time, Dictionary<int, BoneTrack>? tracks = null)
