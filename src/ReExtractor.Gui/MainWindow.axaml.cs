@@ -910,19 +910,22 @@ public partial class MainWindow : Window
 private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
     {
         var pointer = e.GetCurrentPoint(this).Properties;
+        var row = (e.Source as Control)?.DataContext;
         if (pointer.IsRightButtonPressed)
         {
             // The flyout belongs to the whole resource control, so right-clicking anywhere
             // on a row must first make that row current. Menu actions then use this selection.
-            var row = (e.Source as Control)?.DataContext;
             _contextPath = row switch
             {
                 FileTreeNode clickedNode => clickedNode.FilePath,
-                EntryRow clickedEntry => clickedEntry.Path,
+                EntryRow contextEntry => contextEntry.Path,
                 _ => null,
             };
             if (sender is TreeView && row is FileTreeNode node)
-                FileTree.SelectedItem = node;
+            {
+                if (FileTree.SelectedItems?.Contains(node) != true)
+                    FileTree.SelectedItem = node;
+            }
             else if (sender is ListBox && row is EntryRow entry)
             {
                 // Preserve a Ctrl/Shift multi-selection when opening the context menu on one
@@ -941,7 +944,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var clickedPath = clickedRow switch
         {
             FileTreeNode clickedNode => clickedNode.FilePath,
-            EntryRow clickedEntry => clickedEntry.Path,
+            EntryRow doubleClickEntry => doubleClickEntry.Path,
             _ => null,
         };
         if (sender is TreeView && clickedRow is FileTreeNode treeNode)
@@ -969,12 +972,22 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     {
         var node = FileTree.SelectedItem as FileTreeNode;
         SelectPath(node?.FilePath);
+        UpdateResourceSelectionStatus();
     }
 
     private void OnSearchSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         var row = SearchResults.SelectedItem as EntryRow;
         SelectPath(row?.Path);
+        UpdateResourceSelectionStatus();
+    }
+
+    private void UpdateResourceSelectionStatus()
+    {
+        var count = SearchResults.IsVisible
+            ? SearchResults.SelectedItems?.OfType<EntryRow>().Count() ?? 0
+            : FileTree.SelectedItems?.OfType<FileTreeNode>().Count(node => node.FilePath != null) ?? 0;
+        if (count > 1) ActionStatus.Text = $"已选择 {count} 个资源（Ctrl 追加，Shift 连选）";
     }
 
     private void ShowImagePanel()
@@ -1854,7 +1867,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         ExportButton.IsEnabled = false;
         try
         {
-            await Task.Run(() =>
+            var result = await Task.Run(() =>
             {
                 EnsureBlender(blender);
                 var workDir = CreateExportWorkDir("models");
@@ -1868,8 +1881,18 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     RunBlenderBatch("export_models_fbx.py", blender, workDir, outputPath);
                 }
                 finally { TryDeleteDirectory(workDir); }
+                var referencedTextures = paths.SelectMany(path =>
+                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenResource))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var textureResult = ExportTextureFiles(referencedTextures, outDir);
+                return (referencedTextures.Length, textureResult.exported, textureResult.failures);
             });
-            ActionStatus.Text = $"模型 FBX 导出完成：已将全部 {sourceCount} 个源模型合并为 1 个模型 | {outputPath}";
+            foreach (var failure in result.failures) AppendLog("模型相关贴图导出失败：" + failure);
+            var textureSummary = result.Item1 == 0
+                ? "；未找到 MDF 引用贴图"
+                : $"；相关贴图 {result.exported}/{result.Item1} 张 PNG";
+            ActionStatus.Text = $"模型 FBX 导出完成：已将全部 {sourceCount} 个源模型合并为 1 个模型{textureSummary} | {outputPath}";
         }
         catch (Exception ex) { ActionStatus.Text = "模型导出失败：" + ex.Message; }
         finally
@@ -1993,6 +2016,93 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         catch (Exception ex)
         {
             ActionStatus.Text = "导出失败: " + ex.Message;
+        }
+    }
+
+    private static string TextureExportPath(string outputRoot, string nativePath)
+    {
+        var normalized = nativePath.Replace('\\', '/').TrimStart('/');
+        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || parts.Any(part => part is "." or ".."))
+            throw new InvalidDataException($"无效资源路径: {nativePath}");
+
+        var invalid = Path.GetInvalidFileNameChars();
+        static string SafeSegment(string value, char[] invalidChars) =>
+            new(value.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray());
+
+        var safeParts = parts.Select(part => SafeSegment(part, invalid)).ToArray();
+        var fileName = safeParts[^1];
+        var texMarker = fileName.LastIndexOf(".tex.", StringComparison.OrdinalIgnoreCase);
+        if (texMarker < 0)
+            throw new InvalidDataException($"不是可导出的 TEX 资源: {nativePath}");
+        safeParts[^1] = fileName[..texMarker] + ".png";
+
+        var root = Path.GetFullPath(Path.Combine(outputRoot, "textures"));
+        var result = Path.GetFullPath(Path.Combine(new[] { root }.Concat(safeParts).ToArray()));
+        if (!result.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"资源路径超出导出目录: {nativePath}");
+        return result;
+    }
+
+    private (int exported, List<string> failures) ExportTextureFiles(
+        IEnumerable<string> paths, string outputRoot, Action<int, int>? progress = null)
+    {
+        var textures = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var exported = 0;
+        var failures = new List<string>();
+        for (var index = 0; index < textures.Length; index++)
+        {
+            var path = textures[index];
+            try
+            {
+                using var stream = _pak!.ReadFile(path);
+                new TexService().ConvertToPng(stream, path, TextureExportPath(outputRoot, path));
+                exported++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{path}：{ex.Message}");
+            }
+            progress?.Invoke(index + 1, textures.Length);
+        }
+        return (exported, failures);
+    }
+
+    private async void OnCtxExportTextures(object? sender, RoutedEventArgs e)
+    {
+        if (_pak == null) { ActionStatus.Text = "请先加载 PAK"; return; }
+
+        var contextPath = PathFromSender(sender);
+        var paths = SelectedResourcePaths().ToList();
+        if (contextPath != null && paths.All(path =>
+                !path.Equals(contextPath, StringComparison.OrdinalIgnoreCase)))
+            paths.Add(contextPath);
+        var textures = paths.Where(path => KindOf(path) == "tex")
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (textures.Length == 0)
+        {
+            ActionStatus.Text = "请选择一个或多个 .tex 贴图；搜索结果支持 Ctrl / Shift 多选";
+            return;
+        }
+
+        var outputRoot = Path.GetFullPath(CurrentOutputDirectory);
+        var progress = BeginProgress($"正在导出 {textures.Length} 张贴图…", false, textures.Length);
+        ActionStatus.Text = $"正在导出 {textures.Length} 张贴图 PNG…";
+        try
+        {
+            var result = await Task.Run(() => ExportTextureFiles(textures, outputRoot, (current, total) =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    UpdateCountProgress(progress, current, total, "导出贴图"))));
+
+            foreach (var failure in result.failures) AppendLog("贴图导出失败：" + failure);
+            var textureDir = Path.Combine(outputRoot, "textures");
+            ActionStatus.Text = result.failures.Count == 0
+                ? $"贴图导出完成：{result.exported} 张 PNG | {textureDir}"
+                : $"贴图导出完成：成功 {result.exported}，失败 {result.failures.Count}（详见日志） | {textureDir}";
+        }
+        finally
+        {
+            EndProgress(progress);
         }
     }
 
@@ -2149,6 +2259,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var selected = new List<string>();
         if (SearchResults.IsVisible && SearchResults.SelectedItems != null)
             selected.AddRange(SearchResults.SelectedItems.OfType<EntryRow>().Select(row => row.Path));
+        else if (FileTree.SelectedItems != null)
+            selected.AddRange(FileTree.SelectedItems.OfType<FileTreeNode>()
+                .Select(node => node.FilePath).Where(path => path != null).Select(path => path!));
         if (_selectedPath != null) selected.Add(_selectedPath);
         return selected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

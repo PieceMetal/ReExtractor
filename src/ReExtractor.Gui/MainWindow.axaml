@@ -94,7 +94,7 @@
         <TextBox DockPanel.Dock="Top" x:Name="SearchBox" Watermark="模糊搜索当前资源"
                  TextChanged="OnSearchChanged" Margin="0,0,0,6"/>
         <Panel>
-          <TreeView x:Name="FileTree" SelectionChanged="OnTreeSelectionChanged" PointerPressed="OnListPointerPressed">
+          <TreeView x:Name="FileTree" SelectionMode="Multiple" SelectionChanged="OnTreeSelectionChanged">
             <TreeView.Styles>
               <Style Selector="TreeViewItem">
                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
@@ -105,7 +105,8 @@
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
                 <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
-
+                <Separator/>
+                <MenuItem Header="导出贴图 PNG" Click="OnCtxExportTextures"/>
                 <MenuItem Header="打开导出文件夹" Click="OnCtxShowExplorer"/>
               </MenuFlyout>
             </TreeView.ContextFlyout>
@@ -118,7 +119,7 @@
             </TreeView.DataTemplates>
           </TreeView>
           <ListBox x:Name="SearchResults" IsVisible="False" SelectionMode="Multiple"
-                   SelectionChanged="OnSearchSelectionChanged" PointerPressed="OnListPointerPressed">
+                   SelectionChanged="OnSearchSelectionChanged">
             <ListBox.ContextFlyout>
               <MenuFlyout>
                 <MenuItem Header="在目录树中定位" Click="OnCtxLocateInTree"/>
@@ -126,7 +127,8 @@
                 <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
                 <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
-
+                <Separator/>
+                <MenuItem Header="导出选中贴图 PNG" Click="OnCtxExportTextures"/>
                 <MenuItem Header="打开导出文件夹" Click="OnCtxShowExplorer"/>
               </MenuFlyout>
             </ListBox.ContextFlyout>

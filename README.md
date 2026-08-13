@@ -6,11 +6,18 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
-## [⬇ 下载 ReExtractor v1.2.1（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.2.1-win-x64.zip)
+## [⬇ 下载 ReExtractor v1.2.2（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.2.2-win-x64.zip)
 
 > 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
 
-当前版本：`v1.2.1`
+当前版本：`v1.2.2`
+
+## v1.2.2 更新
+
+- 资源目录树和搜索结果支持 Ctrl 追加选择、Shift 连续范围选择，并显示当前选中数量。
+- 右键菜单新增批量导出选中 TEX 贴图为 PNG，保留原资源目录结构，避免同名贴图覆盖。
+- 导出当前角色模型 FBX 时，自动解析所有已加载模型分件的 MDF，并导出其引用的有效 TEX 贴图，无需事先加载贴图。
+- 自动跳过 NullWhite、NullBlack 等占位贴图，并在日志中记录单张导出失败。
 
 ## v1.2.1 更新
 

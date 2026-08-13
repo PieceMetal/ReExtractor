@@ -305,6 +305,37 @@ public static class ViewportDataLoader
 {
     private sealed record PreviewMaterial(ViewportTexture Texture, bool AlphaCutout);
 
+    /// <summary>Resolve every non-placeholder TEX resource referenced by the mesh's sibling MDF.</summary>
+    public static IReadOnlyList<string> ListReferencedTexturePaths(
+        string meshPath, Func<string, Stream?> openResource)
+    {
+        var dotMesh = meshPath.IndexOf(".mesh.", StringComparison.OrdinalIgnoreCase);
+        if (dotMesh < 0) return [];
+        var meshBasePath = meshPath[..dotMesh];
+        foreach (var nameSuffix in MdfNameSuffixCandidates)
+        foreach (var versionSuffix in MdfVersionCandidates)
+        {
+            var mdfPath = meshBasePath + nameSuffix + versionSuffix;
+            using var mdfStream = openResource(mdfPath);
+            if (mdfStream == null) continue;
+            try
+            {
+                var mdf = new MdfFile(new FileHandler(mdfStream, mdfPath));
+                if (!mdf.Read()) continue;
+                return mdf.Materials.SelectMany(material => material.Textures)
+                    .Select(texture => texture.texPath)
+                    .Where(path => !string.IsNullOrWhiteSpace(path) && !IsNullTexture(path))
+                    .Select(path => ResolveNormalizedPath(openResource, path, meshPath))
+                    .Where(path => path != null)
+                    .Select(path => path!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            }
+            catch { continue; }
+        }
+        return [];
+    }
+
     public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null, bool loadTextures = true)
     {
         using var mesh = MeshService.LoadMesh(meshStream, nativePath);
@@ -864,9 +895,15 @@ public static class ViewportDataLoader
     /// </summary>
     private static Stream? OpenNormalized(Func<string, Stream?> open, string texPath, string? meshPath = null)
     {
+        var path = ResolveNormalizedPath(open, texPath, meshPath);
+        return path == null ? null : open(path);
+    }
+
+    private static string? ResolveNormalizedPath(Func<string, Stream?> open, string texPath, string? meshPath = null)
+    {
         var raw = texPath.Replace('\\', '/').TrimStart('/');
         if (raw.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
-            return OpenVersioned(open, raw);
+            return ResolveVersionedPath(open, raw);
 
         // MDF texture paths are relative and the native root is game-specific. DMC5
         // stores them under natives/x64, while RE Engine STM games use natives/stm.
@@ -889,18 +926,27 @@ public static class ViewportDataLoader
         foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var candidate = root + raw;
-            var stream = OpenVersioned(open, candidate);
-            if (stream != null) return stream;
+            var resolved = ResolveVersionedPath(open, candidate);
+            if (resolved != null) return resolved;
         }
         return null;
     }
 
     private static Stream? OpenVersioned(Func<string, Stream?> open, string path)
     {
+        var resolved = ResolveVersionedPath(open, path);
+        return resolved == null ? null : open(resolved);
+    }
+
+    private static string? ResolveVersionedPath(Func<string, Stream?> open, string path)
+    {
         var p = path.Replace('\\', '/');
         var lastDot = p.LastIndexOf('.');
         if (lastDot > 0 && p[(lastDot + 1)..].All(char.IsDigit))
-            return open(p);
+        {
+            using var exact = open(p);
+            return exact == null ? null : p;
+        }
 
         var roots = new[] { "natives/stm/", "natives/x64/" };
         foreach (var root in roots)
@@ -910,14 +956,16 @@ public static class ViewportDataLoader
                 : p;
             foreach (var ver in TexVersionCandidates)
             {
-                var s = open(streaming + ver);
-                if (s != null) return s;
+                var candidate = streaming + ver;
+                using var stream = open(candidate);
+                if (stream != null) return candidate;
             }
         }
         foreach (var ver in TexVersionCandidates)
         {
-            var s = open(p + ver);
-            if (s != null) return s;
+            var candidate = p + ver;
+            using var stream = open(candidate);
+            if (stream != null) return candidate;
         }
         return null;
     }
