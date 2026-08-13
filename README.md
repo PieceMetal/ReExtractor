@@ -6,11 +6,19 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
-## [⬇ 下载 ReExtractor v1.2.0（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.2.0-win-x64.zip)
+## [⬇ 下载 ReExtractor v1.2.1（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.2.1-win-x64.zip)
 
 > 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
 
-当前版本：`v1.2.0`
+当前版本：`v1.2.1`
+
+## v1.2.1 更新
+
+- 修复合并或右键叠加多个模型分件后播放动画不同步、身体变形的问题：改用场景中骨骼最完整的分件作为全局姿势驱动，同名骨骼复用主模型动画。
+- 修复加载贴图后视口仍无贴图的问题：支持 DMC5 的 `natives/x64` 资源根、`.tex.11` 纹理版本，以及 `BaseMetalMap` / `BaseShiftMap` 材质通道。
+- 修复头发远景稀疏、胡子呈灰色颗粒、眼睛无贴图等材质显示问题：毛发类（头发/胡子/眉毛/睫毛等）alpha 裁切阈值统一为 0.1；对眼球材质强制底色 alpha 为不透明并关闭 cutout；隐藏泪膜/角膜等无底色的眼部 overlay 层；无底色的睫毛改用 BaseColor 生成不透明黑色兜底。
+- 修复窗口缩小后顶部工具栏向右越界、动画下拉过宽的布局问题。
+- 切换到不同动画时自动从第 0 帧重新播放。
 
 ## v1.2.0 更新
 
