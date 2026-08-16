@@ -1547,8 +1547,20 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void ShowTimeline(float duration)
     {
-        TimelineSlider.Maximum = Math.Max(0.01, duration);
-        TimelineSlider.Value = 0;
+        // Resetting the slider for a newly selected animation is a programmatic
+        // update, not a user scrub. Without suppression, ValueChanged reaches
+        // OnTimelineScrubbed and immediately pauses the playback that
+        // SetAnimation just started.
+        _suppressSlider = true;
+        try
+        {
+            TimelineSlider.Maximum = Math.Max(0.01, duration);
+            TimelineSlider.Value = 0;
+        }
+        finally
+        {
+            _suppressSlider = false;
+        }
         PlaybackOverlay.IsVisible = true;
         TimelineSlider.IsVisible = true;
         PlaybackButton.Content = Viewport.IsPlaying ? "⏸" : "▶";
