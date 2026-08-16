@@ -1852,6 +1852,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private async Task ExportPreviewModelsFbxAsync()
     {
         if (_pak == null) return;
+        var pak = _pak;
         var paths = _previewMeshPaths.ToArray();
         var exportModels = Viewport.ExportModels;
         var sourceCount = paths.Length;
@@ -1865,40 +1866,87 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var progress = BeginProgress("正在合并并导出 FBX…");
         ActionStatus.Text = $"正在导出预览中的全部 {sourceCount} 个源模型（场景对象 {exportModels.Count} 个）…";
         ExportButton.IsEnabled = false;
+        Stream? OpenCapturedResource(string nativePath)
+        {
+            try { return pak.ReadFile(nativePath); }
+            catch { return null; }
+        }
         try
         {
-            var result = await Task.Run(() =>
+            await Task.Run(() =>
             {
                 EnsureBlender(blender);
                 var workDir = CreateExportWorkDir("models");
                 try
                 {
-                    var models = exportModels
-                        .Select(model => (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups))
-                        .ToArray();
+                    // The viewport normally loads geometry only. Re-read every source with MDF
+                    // textures here so the GLB/FBX gets real material image references even when
+                    // the user never clicked "加载贴图" before exporting.
+                    var texturedMeshes = paths.Select(path =>
+                    {
+                        using var stream = pak.ReadFile(path);
+                        return ViewportDataLoader.LoadMesh(stream, path, 1,
+                            OpenCapturedResource, loadTextures: true);
+                    }).ToArray();
+                    (ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups)[] models;
+                    if (exportModels.Count == texturedMeshes.Length)
+                    {
+                        models = texturedMeshes.Select((mesh, index) =>
+                            (mesh, (IReadOnlySet<int>)exportModels[index].VisibleGroups)).ToArray();
+                    }
+                    else
+                    {
+                        var merged = ViewportMesh.Merge(texturedMeshes);
+                        var visible = exportModels.Count == 1
+                            ? exportModels[0].VisibleGroups
+                            : merged.Groups.Where(group => group.DefaultVisible)
+                                .Select(group => group.Key).ToHashSet();
+                        models = [(merged, (IReadOnlySet<int>)visible)];
+                    }
                     new ViewportExportService().ConvertMergedToGlb(models,
                         Path.Combine(workDir, $"001_{NativeStem(paths[0], ".mesh")}_合并.glb"));
                     RunBlenderBatch("export_models_fbx.py", blender, workDir, outputPath);
                 }
                 finally { TryDeleteDirectory(workDir); }
-                var referencedTextures = paths.SelectMany(path =>
-                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenResource))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                var textureResult = ExportTextureFiles(referencedTextures, outDir);
-                return (referencedTextures.Length, textureResult.exported, textureResult.failures);
             });
-            foreach (var failure in result.failures) AppendLog("模型相关贴图导出失败：" + failure);
-            var textureSummary = result.Item1 == 0
-                ? "；未找到 MDF 引用贴图"
-                : $"；相关贴图 {result.exported}/{result.Item1} 张 PNG";
-            ActionStatus.Text = $"模型 FBX 导出完成：已将全部 {sourceCount} 个源模型合并为 1 个模型{textureSummary} | {outputPath}";
+            ActionStatus.Text = $"模型 FBX 已生成：已将全部 {sourceCount} 个源模型合并为 1 个模型 | {outputPath}";
         }
-        catch (Exception ex) { ActionStatus.Text = "模型导出失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            ActionStatus.Text = "模型导出失败：" + ex.Message;
+            return;
+        }
         finally
         {
             ExportButton.IsEnabled = true;
             EndProgress(progress);
+        }
+
+        // FBX is the primary result. Do not keep its progress bar or export button locked
+        // while the optional MDF/TEX post-processing runs, which can take much longer for
+        // characters with many material maps.
+        ActionStatus.Text = $"模型 FBX 已生成，正在后台导出 MDF 关联贴图… | {outputPath}";
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                var referencedTextures = paths.SelectMany(path =>
+                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenCapturedResource))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var textureResult = ExportTextureFiles(pak, referencedTextures, outDir);
+                return (referencedTextures.Length, textureResult.exported, textureResult.failures);
+            });
+            foreach (var failure in result.failures) AppendLog("模型相关贴图导出失败：" + failure);
+            var textureSummary = result.Item1 == 0
+                ? "未找到 MDF 引用贴图"
+                : $"相关贴图 {result.exported}/{result.Item1} 张 PNG";
+            ActionStatus.Text = $"模型导出完成：{textureSummary} | {outputPath}";
+        }
+        catch (Exception ex)
+        {
+            AppendLog("模型 FBX 已生成，但关联贴图后处理失败：" + ex.Message);
+            ActionStatus.Text = $"模型 FBX 已生成；关联贴图导出失败（详见日志） | {outputPath}";
         }
     }
 
@@ -2044,8 +2092,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         return result;
     }
 
-    private (int exported, List<string> failures) ExportTextureFiles(
-        IEnumerable<string> paths, string outputRoot, Action<int, int>? progress = null)
+    private static (int exported, List<string> failures) ExportTextureFiles(
+        PakService pak, IEnumerable<string> paths, string outputRoot, Action<int, int>? progress = null)
     {
         var textures = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var exported = 0;
@@ -2055,7 +2103,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var path = textures[index];
             try
             {
-                using var stream = _pak!.ReadFile(path);
+                using var stream = pak.ReadFile(path);
                 new TexService().ConvertToPng(stream, path, TextureExportPath(outputRoot, path));
                 exported++;
             }
@@ -2090,7 +2138,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         ActionStatus.Text = $"正在导出 {textures.Length} 张贴图 PNG…";
         try
         {
-            var result = await Task.Run(() => ExportTextureFiles(textures, outputRoot, (current, total) =>
+            var result = await Task.Run(() => ExportTextureFiles(_pak, textures, outputRoot, (current, total) =>
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     UpdateCountProgress(progress, current, total, "导出贴图"))));
 
