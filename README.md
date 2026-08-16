@@ -6,9 +6,9 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
-## [⬇ 下载 ReExtractor v1.2.2（Windows x64）](https://github.com/PieceMetal/ReExtractor/releases/latest/download/ReExtractor-v1.2.2-win-x64.zip)
+## [⬇ 查看 GitHub Releases 构建包](https://github.com/PieceMetal/ReExtractor/releases)
 
-> 下载后解压并运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
+> 请在 Releases 页面选择所需版本的 Windows x64 构建包，解压后运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
 
 当前版本：`v1.2.2`
 
