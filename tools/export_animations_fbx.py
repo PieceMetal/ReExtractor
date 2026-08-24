@@ -83,16 +83,17 @@ os.makedirs(output_dir, exist_ok=True)
 scene = bpy.context.scene
 scene.render.fps = export_fps
 scene.render.fps_base = 1.0
+# Must match model FBX export. Do not alter rest bones, animation keys or axes;
+# only write the FBX in centimeter units so UE does not add a 100x root scale.
+scene.unit_settings.system = "METRIC"
+scene.unit_settings.scale_length = 0.01
+scene.unit_settings.length_unit = "CENTIMETERS"
 
 for index, source in enumerate(inputs, start=1):
     clear_scene()
     scene.render.fps = export_fps
     scene.render.fps_base = 1.0
     bpy.ops.import_scene.gltf(filepath=source)
-
-    for obj in list(bpy.data.objects):
-        if obj.type == "MESH":
-            bpy.data.objects.remove(obj, do_unlink=True)
 
     armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
     if not armatures:
@@ -101,6 +102,14 @@ for index, source in enumerate(inputs, start=1):
     primary = armatures[0]
     primary.name = "Armature"
     primary.data.name = "Armature"
+    # Keep the skinned reference mesh in the animation FBX. Without a skin/cluster
+    # bind pose, animation-only FBX files make importers infer the skeleton rest
+    # transforms from the first animated frame. UE then applies those tracks to a
+    # different reference pose and character parts (especially head/face) separate.
+    # Users can leave UE's "Import Mesh" disabled when importing these as animations.
+    for mesh in (obj for obj in bpy.data.objects if obj.type == "MESH"):
+        mesh.name = "REEXTRACTOR_BIND_POSE_REFERENCE"
+        mesh.data.name = "REEXTRACTOR_BIND_POSE_REFERENCE"
     for duplicate in armatures[1:]:
         bpy.data.objects.remove(duplicate, do_unlink=True)
     armatures = [primary]
@@ -123,7 +132,7 @@ for index, source in enumerate(inputs, start=1):
     bpy.ops.export_scene.fbx(
         filepath=output_path,
         use_selection=True,
-        object_types={"ARMATURE", "EMPTY"},
+        object_types={"ARMATURE", "MESH", "EMPTY"},
         bake_anim=True,
         bake_anim_use_all_actions=False,
         bake_anim_use_nla_strips=False,
@@ -132,6 +141,7 @@ for index, source in enumerate(inputs, start=1):
         bake_anim_simplify_factor=0.0,
         add_leaf_bones=False,
         global_scale=1.0,
+        apply_unit_scale=True,
         apply_scale_options="FBX_SCALE_NONE",
         axis_forward="Y",
         axis_up="Z",

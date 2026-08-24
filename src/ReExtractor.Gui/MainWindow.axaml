@@ -19,6 +19,7 @@
       <MenuItem Header="文件">
         <MenuItem Header="打开 PAK 文件…" Click="OnOpenPakClicked"/>
         <MenuItem Header="加载游戏文件夹…" Click="OnSelectGameDirClicked"/>
+        <MenuItem Header="打开已解包文件夹…" Click="OnOpenExtractedFolderClicked"/>
         <Separator/>
         <MenuItem Header="退出" Click="OnExitClicked"/>
       </MenuItem>
@@ -83,6 +84,12 @@
                 <TextBlock Text="扫描并加载 PAK" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center"/>
                 <TextBlock Text="从游戏文件夹开始" FontSize="11" Foreground="#d9ecff" Margin="0,3,0,0" HorizontalAlignment="Center"/>
               </StackPanel>
+            </Button>
+            <Button Click="OnChooseResourceFolderClicked" HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Height="42"
+                    Background="#2a5f46" Foreground="White" Margin="0,0,0,12">
+              <TextBlock Text="打开已解包文件夹" FontWeight="SemiBold"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Button>
 
             <TextBlock x:Name="StatusText" Text="尚未添加 PAK" Foreground="#9cdcfe"
@@ -382,6 +389,25 @@
                 <Button x:Name="MergeRemoveButton" Content="移除" Click="OnMergeRemoveClicked"/>
                 <Button x:Name="MergeClearButton" Content="清空" Click="OnMergeClearClicked"/>
               </StackPanel>
+              <Border Background="#1b222b" BorderBrush="#354354" BorderThickness="1"
+                      CornerRadius="5" Padding="8" Margin="0,0,0,6">
+                <StackPanel>
+                  <TextBlock Text="模型组装预设（按游戏分类）"
+                             Foreground="#9cdcfe" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                    <TextBox Grid.Column="0" x:Name="AssemblyPresetNameBox"
+                             Watermark="输入预设名称后保存"/>
+                    <Button Grid.Column="1" Content="保存预设"
+                            Click="OnAssemblyPresetSaveClicked"/>
+                    <Button Grid.Column="2" Content="加载预设"
+                            Click="OnAssemblyPresetLoadClicked"/>
+                  </Grid>
+                  <TextBlock x:Name="AssemblyPresetHint"
+                             Text="当前分类：未识别"
+                             Foreground="#737b87" FontSize="10"
+                             TextWrapping="Wrap" Margin="0,6,0,0"/>
+                </StackPanel>
+              </Border>
               <Button x:Name="MergeLoadButton" Content="合并加载" Click="OnMergeLoadClicked"
                       Background="#0e639c" Foreground="#fff" Margin="0,4,0,0"/>
             </StackPanel>

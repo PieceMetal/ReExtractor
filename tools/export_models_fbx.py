@@ -147,8 +147,15 @@ if not inputs:
     raise RuntimeError("没有可转换的 GLB 模型")
 
 clear_scene()
-bpy.context.scene.render.fps = 60
-bpy.context.scene.render.fps_base = 1.0
+scene = bpy.context.scene
+scene.render.fps = 60
+scene.render.fps_base = 1.0
+# FBX and UE use centimeters.  Keep the GLB skeleton/mesh data untouched so
+# its bind pose and axis orientation stay exactly as imported, then let the
+# FBX exporter convert the scene unit metadata rather than scaling any bones.
+scene.unit_settings.system = "METRIC"
+scene.unit_settings.scale_length = 0.01
+scene.unit_settings.length_unit = "CENTIMETERS"
 
 for source in inputs:
     bpy.ops.import_scene.gltf(filepath=source, import_pack_images=True)
@@ -232,6 +239,7 @@ bpy.ops.export_scene.fbx(
     bake_anim=False,
     add_leaf_bones=False,
     global_scale=1.0,
+    apply_unit_scale=True,
     apply_scale_options="FBX_SCALE_NONE",
     axis_forward="Y",
     axis_up="Z",

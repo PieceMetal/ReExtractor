@@ -156,9 +156,11 @@ public partial class MainWindow : Window
     private readonly List<string> _previewMeshPaths = new();
     private readonly string _tempDir = AppPaths.TempDirectory;
     private readonly string _logDirectory = AppPaths.LogsDirectory;
+    private readonly ModelAssemblyPresetService _assemblyPresetService = new();
     private int _progressOperation;
     private AppSettings _settings = AppSettingsService.Load();
     private readonly List<string> _loadedPakPaths = new();
+    private string? _loadedFolderPath;
     private bool _syncingManagedList;
     private readonly IDisposable? _actionStatusLogSubscription;
     private ViewportBone[]? _boneTreeSource;
@@ -173,6 +175,7 @@ public partial class MainWindow : Window
         Directory.CreateDirectory(_logDirectory);
         GameDirBox.Text = _settings.LastGameDirectory;
         RefreshManagedLists(_settings.LastListPath);
+        RefreshAssemblyPresetHint();
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnWindowDragOver);
         AddHandler(DragDrop.DropEvent, OnWindowDrop);
@@ -273,6 +276,101 @@ public partial class MainWindow : Window
     }
 
     private string? SelectedListPath => (ManagedListCombo.SelectedItem as ManagedFileList)?.FilePath;
+
+    private string CurrentAssemblyGameKey
+    {
+        get
+        {
+            var selectedList = ManagedListCombo.SelectedItem as ManagedFileList;
+            if (selectedList != null && !string.IsNullOrWhiteSpace(selectedList.Identifier))
+                return selectedList.Identifier;
+
+            if (!string.IsNullOrWhiteSpace(_loadedFolderPath))
+            {
+                var name = new DirectoryInfo(_loadedFolderPath).Name;
+                return string.IsNullOrWhiteSpace(name) ? "未分类游戏" : name;
+            }
+
+            if (_loadedPakPaths.Count > 0)
+            {
+                var parent = Path.GetDirectoryName(_loadedPakPaths[0]);
+                if (!string.IsNullOrWhiteSpace(parent)) return new DirectoryInfo(parent).Name;
+            }
+
+            return "未分类游戏";
+        }
+    }
+
+    private string CurrentAssemblySourceFolder =>
+        !string.IsNullOrWhiteSpace(_loadedFolderPath)
+            ? _loadedFolderPath
+            : (_loadedPakPaths.Count > 0 ? Path.GetDirectoryName(_loadedPakPaths[0]) ?? "" : "");
+
+    private void RefreshAssemblyPresetHint()
+    {
+        if (AssemblyPresetHint == null) return;
+        var gameKey = CurrentAssemblyGameKey;
+        var count = _assemblyPresetService.List(gameKey).Count;
+        AssemblyPresetHint.Text = $"当前分类：{gameKey} · 已保存 {count} 个预设";
+    }
+
+    private void OnAssemblyPresetSaveClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_mergeQueue.Count == 0)
+        {
+            ActionStatus.Text = "合并队列为空，请先添加模型部件";
+            return;
+        }
+
+        var name = AssemblyPresetNameBox.Text?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ActionStatus.Text = "请输入预设名称";
+            return;
+        }
+
+        try
+        {
+            var file = _assemblyPresetService.Save(
+                CurrentAssemblyGameKey, name, CurrentAssemblySourceFolder, _mergeQueue);
+            AssemblyPresetNameBox.Text = "";
+            RefreshAssemblyPresetHint();
+            ActionStatus.Text = $"预设已保存：{file}";
+        }
+        catch (Exception ex)
+        {
+            ActionStatus.Text = "保存预设失败：" + ex.Message;
+        }
+    }
+
+    private async void OnAssemblyPresetLoadClicked(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "加载模型组装预设",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("模型组装预设") { Patterns = ["*.json"] }],
+        });
+        if (files.Count == 0) return;
+
+        try
+        {
+            var preset = _assemblyPresetService.Load(files[0].Path.LocalPath);
+            var missing = preset.MeshPaths.Where(path => !_byPath.ContainsKey(path)).ToArray();
+            _mergeQueue.Clear();
+            _mergeQueue.AddRange(preset.MeshPaths.Where(path => _byPath.ContainsKey(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase));
+            RefreshMergeList();
+            RefreshAssemblyPresetHint();
+            ActionStatus.Text = missing.Length == 0
+                ? $"已加载预设“{preset.Name}”：{_mergeQueue.Count} 个部件"
+                : $"已加载预设“{preset.Name}”：{_mergeQueue.Count} 个部件；当前资源中缺少 {missing.Length} 个";
+        }
+        catch (Exception ex)
+        {
+            ActionStatus.Text = "加载预设失败：" + ex.Message;
+        }
+    }
 
     private void RefreshManagedLists(string? selectPath = null)
     {
@@ -701,18 +799,104 @@ public partial class MainWindow : Window
         if (files.Count > 0) await LoadPakFilesAsync(files.Select(file => file.Path.LocalPath));
     }
 
+    private async void OnOpenExtractedFolderClicked(object? sender, RoutedEventArgs e)
+    {
+        var folder = await ChooseResourceFolderAsync();
+        if (folder != null) await LoadExtractedFolderAsync(folder);
+    }
+
     private void OnWindowDragOver(object? sender, DragEventArgs e)
     {
         var files = e.Data.GetFiles()?.ToArray() ?? [];
-        e.DragEffects = files.Length > 0 && files.All(file => file.Path.LocalPath.EndsWith(".pak", StringComparison.OrdinalIgnoreCase))
-            ? DragDropEffects.Copy : DragDropEffects.None;
+        e.DragEffects = files.Length > 0 &&
+            (files.All(file => file.Path.LocalPath.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)) ||
+             files.All(file => Directory.Exists(file.Path.LocalPath)))
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
     }
 
     private async void OnWindowDrop(object? sender, DragEventArgs e)
     {
-        var paths = e.Data.GetFiles()?.Select(file => file.Path.LocalPath)
-            .Where(path => path.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
-        if (paths.Length > 0) await LoadPakFilesAsync(paths);
+        var paths = e.Data.GetFiles()?.Select(file => file.Path.LocalPath).ToArray() ?? [];
+        var paks = paths.Where(path => path.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (paks.Length > 0)
+        {
+            await LoadPakFilesAsync(paks);
+            return;
+        }
+
+        var folder = paths.FirstOrDefault(Directory.Exists);
+        if (folder != null) await LoadExtractedFolderAsync(folder);
+    }
+
+    private async Task<string?> ChooseResourceFolderAsync()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "打开已解包资源文件夹",
+            AllowMultiple = false,
+        });
+        return folders.Count > 0 ? folders[0].Path.LocalPath : null;
+    }
+
+    private async void OnChooseResourceFolderClicked(object? sender, RoutedEventArgs e)
+    {
+        var folder = await ChooseResourceFolderAsync();
+        if (folder != null) await LoadExtractedFolderAsync(folder);
+    }
+
+    private async Task LoadExtractedFolderAsync(string folderPath)
+    {
+        var folder = Path.GetFullPath(folderPath);
+        if (!Directory.Exists(folder))
+        {
+            ActionStatus.Text = "请选择有效的解包文件夹";
+            return;
+        }
+
+        var progress = BeginProgress("正在索引解包文件夹…");
+        try
+        {
+            StatusText.Text = "索引中…";
+            var (source, entries, treeRoot) = await Task.Run(() =>
+            {
+                var p = new PakService();
+                p.AddFolder(folder);
+                var list = p.EnumerateFiles()
+                    .Select(file => new EntryRow(file.Path, file.DecompressedSize, file.SourcePak))
+                    .ToList();
+                return (p, list, BuildTree(list));
+            });
+
+            if (entries.Count == 0)
+            {
+                ActionStatus.Text = "解包文件夹中没有找到可识别的资源文件";
+                return;
+            }
+
+            _pak = source;
+            _all = entries;
+            _treeRoot = treeRoot;
+            _byPath.Clear();
+            foreach (var row in entries) _byPath[row.Path] = row;
+            FileTree.ItemsSource = treeRoot.Children;
+            ApplyFilter();
+
+            _loadedPakPaths.Clear();
+            _loadedFolderPath = folder;
+            RefreshAssemblyPresetHint();
+            StatusText.Text = $"解包文件夹 · {entries.Count:N0} 个文件";
+            ActionStatus.Text = $"解包文件夹加载完成：{folder}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = "加载失败：" + ex.Message;
+            ActionStatus.Text = "解包文件夹加载失败：" + ex.Message;
+        }
+        finally
+        {
+            EndProgress(progress);
+        }
     }
 
 
@@ -763,6 +947,8 @@ public partial class MainWindow : Window
             ApplyFilter();
             _loadedPakPaths.Clear();
             _loadedPakPaths.AddRange(paths);
+            _loadedFolderPath = null;
+            RefreshAssemblyPresetHint();
             StatusText.Text = $"{paths.Length} 个 PAK · {entries.Count:N0} 个文件";
             ActionStatus.Text = $"PAK 加载完成：{string.Join("、", paths.Select(Path.GetFileName))}";
         }
@@ -778,6 +964,11 @@ public partial class MainWindow : Window
 
     private async void OnReloadFileTreeClicked(object? sender, RoutedEventArgs e)
     {
+        if (!string.IsNullOrWhiteSpace(_loadedFolderPath))
+        {
+            await LoadExtractedFolderAsync(_loadedFolderPath);
+            return;
+        }
         if (_loadedPakPaths.Count == 0)
         {
             ActionStatus.Text = "请先打开 PAK 文件或扫描游戏文件夹";

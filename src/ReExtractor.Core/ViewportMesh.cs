@@ -70,6 +70,16 @@ public sealed class ViewportMesh
         var perMeshGroupMap = new List<Dictionary<int, int>>();
         var groups = new List<ViewportGroup>();
         var nextGroupKey = 0;
+        // Use the most complete source skeleton as the canonical bind pose.
+        // The merge queue often starts with head/hair parts; taking bind
+        // matrices from whichever part appears first can combine a parent
+        // hierarchy from one part with inverse-bind data from another and
+        // makes the whole lower body visibly vibrate after animation export.
+        var canonicalMeshIndex = meshes
+            .Select((mesh, index) => (mesh, index))
+            .OrderByDescending(item => item.mesh.Bones.Length)
+            .ThenBy(item => item.index)
+            .First().index;
         for (var m = 0; m < meshes.Count; m++)
         {
             var mb = meshes[m].Bones;
@@ -107,13 +117,28 @@ public sealed class ViewportMesh
             perMeshGroupMap.Add(groupMap);
         }
 
+        var canonicalBoneIndexByName = meshes[canonicalMeshIndex].Bones
+            .Select((bone, index) => (bone.Name, index))
+            .GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().index,
+                StringComparer.OrdinalIgnoreCase);
+        for (var unifiedIndex = 0; unifiedIndex < bones.Count; unifiedIndex++)
+        {
+            var name = bones[unifiedIndex].Name;
+            if (canonicalBoneIndexByName.TryGetValue(name, out var canonicalBoneIndex))
+                boneSources[unifiedIndex] = (canonicalMeshIndex, canonicalBoneIndex);
+        }
+
         // ParentIndex belongs to each source skeleton and cannot be copied verbatim into
         // the union skeleton. A character part may expose C_Hip as a top-level deform bone
         // while another part contains the complete Root -> C_Hip hierarchy. Prefer any
         // valid parent supplied by the merged sources instead of freezing the hierarchy to
         // whichever part happened to be added first.
         var preferredParents = Enumerable.Repeat(-1, bones.Count).ToArray();
-        for (var sourceMesh = 0; sourceMesh < meshes.Count; sourceMesh++)
+        var preferredBindSources = Enumerable.Repeat((-1, -1), bones.Count).ToArray();
+        var sourceOrder = new[] { canonicalMeshIndex }
+            .Concat(Enumerable.Range(0, meshes.Count).Where(index => index != canonicalMeshIndex));
+        foreach (var sourceMesh in sourceOrder)
         {
             var sourceBones = meshes[sourceMesh].Bones;
             var map = perMeshBoneMap[sourceMesh];
@@ -124,7 +149,10 @@ public sealed class ViewportMesh
                 var unifiedBone = map[sourceBone];
                 var unifiedParent = map[sourceParent];
                 if (unifiedParent != unifiedBone && preferredParents[unifiedBone] < 0)
+                {
                     preferredParents[unifiedBone] = unifiedParent;
+                    preferredBindSources[unifiedBone] = (sourceMesh, sourceBone);
+                }
             }
         }
 
@@ -133,6 +161,11 @@ public sealed class ViewportMesh
             var (sourceMesh, sourceBone) = boneSources[unifiedIndex];
             var source = meshes[sourceMesh].Bones[sourceBone];
             var remappedParent = preferredParents[unifiedIndex];
+            var bindSource = preferredBindSources[unifiedIndex];
+            if (bindSource.Item1 >= 0)
+            {
+                source = meshes[bindSource.Item1].Bones[bindSource.Item2];
+            }
             bones[unifiedIndex] = new ViewportBone
             {
                 Name = source.Name,
@@ -338,7 +371,7 @@ public static class ViewportDataLoader
 
     public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null, bool loadTextures = true)
     {
-        using var mesh = MeshService.LoadMesh(meshStream, nativePath);
+        using var mesh = MeshService.LoadMesh(meshStream, nativePath, openResource);
         var meshData = mesh.MeshData ?? throw new InvalidDataException("MeshData missing");
         var lod = meshData.LODs[Math.Min(lodIndex, meshData.LODs.Count - 1)];
 
@@ -1198,7 +1231,12 @@ public static class ViewportDataLoader
     /// <paramref name="meshBoneNames"/> is supplied the tracks are remapped onto the mesh skeleton
     /// via MurMur3 name hash (matches fmt_RE_MESH). Tracks for bones the mesh lacks are skipped.
     /// </summary>
-    public static AnimationClip LoadAnimation(Stream motlistStream, string motlistPath, int motionIndex = 0, IReadOnlyList<string>? meshBoneNames = null)
+    public static AnimationClip LoadAnimation(
+        Stream motlistStream,
+        string motlistPath,
+        int motionIndex = 0,
+        IReadOnlyList<string>? meshBoneNames = null,
+        IReadOnlyList<ViewportMesh>? sceneMeshes = null)
     {
         using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
         if (!motlist.Read())
@@ -1208,6 +1246,23 @@ public static class ViewportDataLoader
             ?? throw new InvalidDataException($"Motion index {motionIndex} out of range");
         if (motion.MotFile is not MotFile mot)
             throw new NotSupportedException("Motion has no embedded .mot data");
+
+        // Noesis adds bones that exist in the MOT header but are absent from
+        // an individual mesh part before it builds the keyframe animation.
+        // MH Wilds stores leg/hand IK and helper bones this way. Keep the
+        // original weighted bone indices intact and append only the missing
+        // animation bones.
+        if (sceneMeshes is { Count: > 0 })
+        {
+            foreach (var sceneMesh in sceneMeshes)
+                AddAnimationBones(sceneMesh, mot.Bones);
+
+            meshBoneNames = sceneMeshes
+                .SelectMany(mesh => mesh.Bones)
+                .Select(bone => bone.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
 
         // map bone-name hash -> mesh bone index (case-sensitive MurMur3, as RE uses)
         Dictionary<uint, (int Index, string Name)>? hashToBone = null;
@@ -1282,6 +1337,78 @@ public static class ViewportDataLoader
             FrameRate = sourceFrameRate, FrameCount = sourceFrameCount,
             Tracks = tracks, NamedTracks = namedTracks,
         };
+    }
+
+    private static void AddAnimationBones(ViewportMesh mesh, IReadOnlyList<MotBone> motionBones)
+    {
+        if (motionBones.Count == 0) return;
+
+        var byName = mesh.Bones
+            .Select((bone, index) => (bone, index))
+            .ToDictionary(item => item.bone.Name, item => item.index,
+                StringComparer.OrdinalIgnoreCase);
+        var sourceByName = motionBones
+            .Where(bone => !string.IsNullOrWhiteSpace(bone.boneName))
+            .GroupBy(bone => bone.boneName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(),
+                StringComparer.OrdinalIgnoreCase);
+        var adding = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        int Ensure(string name)
+        {
+            if (byName.TryGetValue(name, out var existing)) return existing;
+            if (!sourceByName.TryGetValue(name, out var source)) return -1;
+            if (!adding.Add(name)) return -1;
+
+            var parentName = source.Parent?.boneName;
+            var parentIndex = !string.IsNullOrWhiteSpace(parentName)
+                ? Ensure(parentName!)
+                : -1;
+            var local = Matrix4x4.CreateFromQuaternion(
+                            Quaternion.Normalize(source.quaternion)) *
+                        Matrix4x4.CreateTranslation(source.translation);
+            var index = mesh.Bones.Length;
+            Array.Resize(ref mesh.Bones, index + 1);
+            mesh.Bones[index] = new ViewportBone
+            {
+                Name = source.boneName,
+                ParentIndex = parentIndex,
+                LocalBind = local,
+                InverseGlobalBind = Matrix4x4.Identity,
+            };
+            byName[name] = index;
+            adding.Remove(name);
+            return index;
+        }
+
+        foreach (var source in motionBones)
+            if (!string.IsNullOrWhiteSpace(source.boneName))
+                Ensure(source.boneName);
+
+        var globals = new Matrix4x4[mesh.Bones.Length];
+        var computed = new bool[mesh.Bones.Length];
+        for (var index = 0; index < mesh.Bones.Length; index++)
+            Compute(index);
+
+        for (var index = 0; index < mesh.Bones.Length; index++)
+            if (Matrix4x4.Invert(globals[index], out var inverse))
+                mesh.Bones[index].InverseGlobalBind = inverse;
+
+        void Compute(int index)
+        {
+            if (computed[index]) return;
+            var parent = mesh.Bones[index].ParentIndex;
+            if (parent >= 0 && parent < mesh.Bones.Length && parent != index)
+            {
+                Compute(parent);
+                globals[index] = mesh.Bones[index].LocalBind * globals[parent];
+            }
+            else
+            {
+                globals[index] = mesh.Bones[index].LocalBind;
+            }
+            computed[index] = true;
+        }
     }
 
     private static uint TrackFrameRate(Track track) => track.frameRate > 0 ? track.frameRate : 60u;

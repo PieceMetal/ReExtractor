@@ -14,13 +14,47 @@ public sealed record PakEntryInfo(string Path, long DecompressedSize, long Compr
 public sealed class PakService
 {
     private readonly List<string> _pakFiles = new();
+    private readonly List<FolderMount> _folderMounts = new();
     private readonly Dictionary<ulong, string> _knownPaths = new();
+    private readonly Dictionary<string, FolderFile> _folderFiles =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _folderAliases =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record FolderMount(string Root, string VirtualRoot, string DisplayName);
+    private sealed record FolderFile(string PhysicalPath, string DisplayPath, long Size, string SourceFolder);
 
     /// <summary>Add a PAK file. Add in chronological order: base first, patches after (patches win).</summary>
     public void AddPak(string pakPath)
     {
         if (!File.Exists(pakPath)) throw new FileNotFoundException("PAK not found", pakPath);
         _pakFiles.Add(pakPath);
+    }
+
+    /// <summary>
+    /// Add an already-unpacked RE Engine resource directory.
+    ///
+    /// The method accepts either a native resource root (containing natives/),
+    /// a re_chunk_000 directory, or a larger extraction workspace.  It also
+    /// recognizes the project's convenience "motion" directory and exposes it
+    /// both as motion/... and natives/STM/Motion/... so embedded references can
+    /// still resolve when the original game is not installed.
+    /// </summary>
+    public void AddFolder(string folderPath)
+    {
+        if (!Directory.Exists(folderPath))
+            throw new DirectoryNotFoundException($"Resource folder not found: {folderPath}");
+
+        var fullPath = Path.GetFullPath(folderPath);
+        var mounts = DetectFolderMounts(fullPath);
+        if (mounts.Count == 0)
+            mounts.Add(new FolderMount(fullPath, string.Empty, Path.GetFileName(fullPath)));
+
+        foreach (var mount in mounts)
+        {
+            _folderMounts.Add(mount);
+            IndexFolderMount(mount);
+        }
     }
 
     /// <summary>Auto-detect re_chunk_000.pak + patch paks in a game directory, in chronological order.</summary>
@@ -48,6 +82,9 @@ public sealed class PakService
 
     public int KnownPathCount => _knownPaths.Count;
     public int PakCount => _pakFiles.Count;
+    public int FolderCount => _folderMounts.Select(m => m.DisplayName)
+        .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    public bool HasFolders => _folderMounts.Count > 0;
 
     /// <summary>
     /// Enumerate all entries that resolve to a known path.
@@ -57,6 +94,23 @@ public sealed class PakService
     {
         var result = new List<PakEntryInfo>();
         var seen = new HashSet<ulong>();
+
+        // A folder is already path-addressable, so it does not require a .list.
+        // Later folder mounts win over earlier mounts, matching patch PAK priority.
+        foreach (var file in _folderFiles.Values
+                     .OrderByDescending(file => _folderMounts.FindIndex(m =>
+                         m.DisplayName.Equals(file.SourceFolder, StringComparison.OrdinalIgnoreCase)))
+                     .ThenBy(file => file.DisplayPath, StringComparer.OrdinalIgnoreCase))
+        {
+            var hash = PakUtils.GetFilepathHash(file.DisplayPath);
+            if (!seen.Add(hash)) continue;
+            result.Add(new PakEntryInfo(
+                file.DisplayPath,
+                file.Size,
+                file.Size,
+                file.SourceFolder));
+        }
+
         for (var i = _pakFiles.Count - 1; i >= 0; i--)
         {
             using var pak = new PakFile();
@@ -77,6 +131,9 @@ public sealed class PakService
     /// <summary>Read one file (by native path) into memory, searching highest-priority PAK first.</summary>
     public MemoryStream ReadFile(string nativePath)
     {
+        if (TryReadFolderFile(nativePath, out var folderStream))
+            return folderStream;
+
         var hash = PakUtils.GetFilepathHash(nativePath);
         for (var i = _pakFiles.Count - 1; i >= 0; i--)
         {
@@ -104,4 +161,142 @@ public sealed class PakService
         ms.Dispose();
         return outPath;
     }
+
+    private static List<FolderMount> DetectFolderMounts(string root)
+    {
+        var result = new List<FolderMount>();
+
+        void AddIfDirectory(string physicalRoot, string virtualRoot, string displayName)
+        {
+            if (!Directory.Exists(physicalRoot)) return;
+            result.Add(new FolderMount(
+                Path.GetFullPath(physicalRoot),
+                NormalizePath(virtualRoot),
+                displayName));
+        }
+
+        // Native root selected directly: <folder>/natives/...
+        AddIfDirectory(Path.Combine(root, "natives"), string.Empty,
+            Path.GetFileName(root));
+
+        // Typical ree-pak-rs / RE Engine extraction layout:
+        // <root>/re_chunk_000/natives/... or
+        // <root>/Game_Extract/MHWILDS_EXTRACT/re_chunk_000/natives/...
+        IEnumerable<string> chunks;
+        try
+        {
+            chunks = Directory.EnumerateDirectories(root, "re_chunk_*",
+                SearchOption.AllDirectories).ToArray();
+        }
+        catch
+        {
+            chunks = Array.Empty<string>();
+        }
+        foreach (var chunk in chunks)
+        {
+            var natives = Path.Combine(chunk, "natives");
+            if (Directory.Exists(natives))
+                AddIfDirectory(chunk, string.Empty, Path.GetFileName(root));
+        }
+
+        // The workspace used by this project contains a shortened motion tree.
+        // Keep the original relative path and add the native alias.  When the
+        // user selects re_chunk_000 directly, the sibling "motion" directory
+        // lives several levels above it, so walk a few ancestors as well.
+        var motionRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cursor = new DirectoryInfo(root);
+        for (var depth = 0; cursor != null && depth <= 6; depth++, cursor = cursor.Parent)
+        {
+            var motion = Path.Combine(cursor.FullName, "motion");
+            if (Directory.Exists(motion)) motionRoots.Add(Path.GetFullPath(motion));
+        }
+        foreach (var motion in motionRoots)
+        {
+            AddIfDirectory(motion, "motion", Path.GetFileName(root));
+            AddIfDirectory(motion, "natives/STM/Motion", Path.GetFileName(root));
+        }
+
+        // If the selected directory itself is a native root, do not add the
+        // fallback root mount as it would duplicate every entry.
+        if (result.Count == 0)
+            AddIfDirectory(root, string.Empty, Path.GetFileName(root));
+
+        return result;
+    }
+
+    private void IndexFolderMount(FolderMount mount)
+    {
+        foreach (var physicalPath in Directory.EnumerateFiles(
+                     mount.Root, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(mount.Root, physicalPath);
+            var displayPath = string.IsNullOrEmpty(mount.VirtualRoot)
+                ? relative
+                : Path.Combine(mount.VirtualRoot, relative);
+            displayPath = NormalizePath(displayPath);
+            if (displayPath.Length == 0) continue;
+
+            // Newer mounts overwrite older mounts, just like patch PAKs.
+            _folderFiles[displayPath] = new FolderFile(
+                physicalPath,
+                displayPath,
+                new FileInfo(physicalPath).Length,
+                mount.DisplayName);
+
+            // An extracted RE chunk is commonly opened at different levels:
+            // some callers use natives/STM/..., while the GUI tree may show
+            // STM/... after selecting the natives folder.  Keep one canonical
+            // enumerated path and add read-only aliases for embedded links.
+            if (displayPath.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
+            {
+                var withoutNatives = displayPath["natives/".Length..];
+                _folderAliases[withoutNatives] = displayPath;
+            }
+            else if (displayPath.StartsWith("STM/", StringComparison.OrdinalIgnoreCase))
+            {
+                _folderAliases["natives/" + displayPath] = displayPath;
+            }
+        }
+    }
+
+    private bool TryReadFolderFile(string nativePath, out MemoryStream stream)
+    {
+        stream = null!;
+        var normalized = NormalizePath(nativePath);
+        if (!_folderFiles.TryGetValue(normalized, out var file) &&
+            _folderAliases.TryGetValue(normalized, out var canonical))
+        {
+            _folderFiles.TryGetValue(canonical, out file);
+        }
+
+        if (file == null)
+        {
+            // Embedded references normally use the native path, while some
+            // extracted convenience trees use a shortened path.
+            if (normalized.StartsWith("natives/STM/Motion/", StringComparison.OrdinalIgnoreCase))
+            {
+                var shortPath = "motion/" + normalized["natives/STM/Motion/".Length..];
+                if (!_folderFiles.TryGetValue(shortPath, out file) &&
+                    _folderAliases.TryGetValue(shortPath, out canonical))
+                    _folderFiles.TryGetValue(canonical, out file);
+            }
+            else if (normalized.StartsWith("motion/", StringComparison.OrdinalIgnoreCase))
+            {
+                var nativeAlias = "natives/STM/Motion/" + normalized["motion/".Length..];
+                if (!_folderFiles.TryGetValue(nativeAlias, out file) &&
+                    _folderAliases.TryGetValue(nativeAlias, out canonical))
+                    _folderFiles.TryGetValue(canonical, out file);
+            }
+        }
+
+        if (file == null) return false;
+        stream = new MemoryStream((int)Math.Min(file.Size, int.MaxValue));
+        using (var input = File.OpenRead(file.PhysicalPath))
+            input.CopyTo(stream);
+        stream.Position = 0;
+        return true;
+    }
+
+    private static string NormalizePath(string path)
+        => path.Replace('\\', '/').Trim('/');
 }

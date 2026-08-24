@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 using System.Collections.Generic;
 
@@ -262,6 +262,18 @@ public sealed class GlViewport : OpenGlControlBase
 
     }
 
+    /// <summary>All currently loaded scene meshes, including merge extras.</summary>
+    public IReadOnlyList<ViewportMesh> SceneMeshes
+    {
+        get
+        {
+            var result = new List<ViewportMesh>();
+            if (_primary != null) result.Add(_primary.Mesh);
+            result.AddRange(_extras.Select(extra => extra.Mesh));
+            return result;
+        }
+    }
+
     private static readonly HashSet<int> EmptyGroupSet = [];
 
     public event Action? StateChanged;
@@ -293,17 +305,27 @@ public sealed class GlViewport : OpenGlControlBase
     }
 
     /// <summary>
-    /// Bone names used to decode a motlist.  Use the most complete loaded skeleton,
-    /// not a concatenated list whose first duplicate wins the bone-hash mapping.
-    /// Right-click overlay order can start with a small partial mesh; decoding against
-    /// that mesh drops tracks for bones that only exist in the later full-body part.
+    /// Bone names used to decode a motlist.  Use the union of every loaded
+    /// model part: MH Wilds splits the hunter skeleton across body, head,
+    /// clothing and hand/finger parts.  Decoding against only the largest
+    /// single part drops finger tracks when that part does not contain them.
     /// </summary>
     public string[] AllMeshBoneNames
     {
         get
         {
-            var driver = GetPoseDriver();
-            return driver?.Mesh.Bones.Select(bone => bone.Name).ToArray() ?? [];
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_primary != null)
+            {
+                foreach (var bone in _primary.Mesh.Bones)
+                    names.Add(bone.Name);
+            }
+            foreach (var extra in _extras)
+            {
+                foreach (var bone in extra.Mesh.Bones)
+                    names.Add(bone.Name);
+            }
+            return names.ToArray();
         }
     }
 
@@ -467,6 +489,10 @@ public sealed class GlViewport : OpenGlControlBase
 
         _time = 0;
 
+        EnsureAnimationBoneBuffers(_primary);
+        foreach (var extra in _extras)
+            EnsureAnimationBoneBuffers(extra);
+
         if (_primary != null) _primary.Tracks = BuildTrackMap(_primary);
 
         foreach (var extra in _extras) extra.Tracks = BuildTrackMap(extra);
@@ -475,6 +501,14 @@ public sealed class GlViewport : OpenGlControlBase
 
         StateChanged?.Invoke();
 
+    }
+
+    private void EnsureAnimationBoneBuffers(GlModel? model)
+    {
+        if (model == null) return;
+        if (model.BoneGlobals.Length < model.Mesh.Bones.Length)
+            model.BoneGlobals = new Matrix4x4[Math.Max(1, model.Mesh.Bones.Length)];
+        ComputeBindBoneGlobals(model);
     }
 
 
@@ -3206,4 +3240,3 @@ public sealed class GlViewport : OpenGlControlBase
     }
 
 }
-

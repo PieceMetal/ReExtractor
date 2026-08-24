@@ -31,12 +31,81 @@ public sealed class MeshService
         return outputPath;
     }
 
-    internal static MeshFile LoadMesh(Stream meshStream, string nativePath)
+    internal static MeshFile LoadMesh(
+        Stream meshStream,
+        string nativePath,
+        Func<string, Stream?>? openResource = null)
     {
         var mesh = new MeshFile(new FileHandler(meshStream, nativePath));
         if (!mesh.Read())
             throw new InvalidDataException($"Failed to parse .mesh: {nativePath}");
+
+        // MH Wilds stores part of the vertex/index data in a companion
+        // streaming mesh.  REE-Lib parses the stream descriptors from the
+        // primary mesh, but the actual streaming buffer data must be loaded
+        // explicitly before submesh spans (indices/positions) are accessed.
+        if (mesh.RequiresStreamingData && openResource != null)
+        {
+            foreach (var streamingPath in GetStreamingPathCandidates(nativePath))
+            {
+                using var streamingStream = openResource(streamingPath);
+                if (streamingStream == null) continue;
+
+                var handler = new FileHandler(streamingStream, streamingPath);
+                mesh.LoadStreamingData(handler);
+                if (mesh.StreamingBuffers?.Any(buffer =>
+                        buffer.Positions.Length > 0 &&
+                        (buffer.Faces?.Length > 0 || buffer.IntegerFaces?.Length > 0)) == true)
+                    break;
+            }
+        }
+
         return mesh;
+    }
+
+    private static IEnumerable<string> GetStreamingPathCandidates(string nativePath)
+    {
+        var path = nativePath.Replace('\\', '/').Trim('/');
+        var candidates = new List<string>();
+
+        void Add(string value)
+        {
+            value = value.Replace('\\', '/').Trim('/');
+            if (value.Length > 0 && !candidates.Contains(value, StringComparer.OrdinalIgnoreCase))
+                candidates.Add(value);
+        }
+
+        var marker = "/Art/";
+        var artIndex = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (artIndex >= 0)
+        {
+            var prefix = path[..artIndex];
+            var suffix = path[(artIndex + 1)..]; // Art/...
+            Add($"{prefix}/streaming/{suffix}");
+            Add($"{prefix}/Streaming/{suffix}");
+        }
+
+        if (path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
+        {
+            var nativeRest = path["natives/".Length..];
+            var nativeArtIndex = nativeRest.IndexOf("Art/", StringComparison.OrdinalIgnoreCase);
+            if (nativeArtIndex >= 0)
+            {
+                var root = nativeRest[..nativeArtIndex].TrimEnd('/');
+                var suffix = nativeRest[nativeArtIndex..];
+                Add($"natives/{root}/streaming/{suffix}");
+            }
+        }
+
+        // Convenience extraction roots may omit the natives/ prefix.
+        if (path.StartsWith("STM/Art/", StringComparison.OrdinalIgnoreCase))
+            Add("STM/streaming/" + path["STM/".Length..]);
+        if (path.StartsWith("stm/Art/", StringComparison.OrdinalIgnoreCase))
+            Add("stm/streaming/" + path["stm/".Length..]);
+        if (path.StartsWith("Art/", StringComparison.OrdinalIgnoreCase))
+            Add("streaming/" + path);
+
+        return candidates;
     }
 
     internal static SkeletonData BuildSkeletonInternal(MeshBoneHierarchy? boneData) => BuildSkeleton(boneData);
