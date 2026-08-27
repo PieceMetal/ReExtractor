@@ -35,6 +35,30 @@ public sealed class ViewportMesh
     /// <summary>viscon group filter summary, e.g. "viscon 7/11（隐藏 9,10,131,250）".</summary>
     public string VisconInfo = "";
 
+    /// <summary>Bake a rigid scene-node transform into a mesh instance.</summary>
+    public ViewportMesh WithTransform(Matrix4x4 transform)
+    {
+        Matrix4x4.Invert(transform, out var inverse);
+        var normalMatrix = Matrix4x4.Transpose(inverse);
+        return new ViewportMesh
+        {
+            Vertices = Vertices.Select(vertex => Vector3.Transform(vertex, transform)).ToArray(),
+            Normals = Normals.Select(normal => Vector3.Normalize(Vector3.TransformNormal(normal, normalMatrix))).ToArray(),
+            Uvs = Uvs,
+            Faces = Faces,
+            FaceTexture = FaceTexture,
+            FaceExportHidden = FaceExportHidden,
+            FaceAlphaCutout = FaceAlphaCutout,
+            FaceGroups = FaceGroups,
+            Groups = Groups,
+            Textures = Textures,
+            Weights = Weights,
+            Bones = Bones,
+            DeformToBone = DeformToBone,
+            VisconInfo = VisconInfo,
+        };
+    }
+
     /// <summary>
     /// Merge multiple meshes into ONE unified mesh (geometry + skeleton + textures).
     /// Bones are unified by NAME: parts sharing a skeleton (e.g. one character's
@@ -476,12 +500,15 @@ public static class ViewportDataLoader
                 var positions = sub.Positions;
                 if (positions.Length == 0) continue;
                 var vBase = verts.Count;
-                var w = sub.Weights;
-                var norTan = sub.NormalsTangents;
-                var uv0 = sub.UV0;
-                var hasWeights = w.Length >= positions.Length;
-                var hasNormals = norTan.Length >= positions.Length;
-                var hasUvs = uv0.Length >= positions.Length;
+                // Some MHR helper/debris meshes declare a vertex range but do not
+                // contain skin-weight data. Accessing Submesh.Weights blindly makes
+                // Span slicing throw before the unskinned fallback can be used.
+                var hasWeights = HasBufferRange(sub.Buffer.Weights.Length, sub.vertsIndexOffset, sub.vertCount);
+                var hasNormals = HasBufferRange(sub.Buffer.NormalsTangents.Length, sub.vertsIndexOffset, sub.vertCount);
+                var hasUvs = HasBufferRange(sub.Buffer.UV0.Length, sub.vertsIndexOffset, sub.vertCount);
+                var w = hasWeights ? sub.Weights : default;
+                var norTan = hasNormals ? sub.NormalsTangents : default;
+                var uv0 = hasUvs ? sub.UV0 : default;
 
                 for (var i = 0; i < positions.Length; i++)
                 {
@@ -913,8 +940,11 @@ public static class ViewportDataLoader
     private static readonly string[] MdfNameSuffixCandidates = ["", "_v00"];
 
     private static readonly string[] MdfVersionCandidates =
-        [".mdf2.51", ".mdf2.50", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
+        [".mdf2.51", ".mdf2.50", ".mdf2.45", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
          ".mdf2.23", ".mdf2.21", ".mdf2.19", ".mdf2.13", ".mdf2.10", ".mdf2.6"];
+
+    private static bool HasBufferRange(int bufferLength, int offset, int count)
+        => offset >= 0 && count >= 0 && offset <= bufferLength && count <= bufferLength - offset;
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
     private static readonly string[] TexVersionCandidates =
         [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];

@@ -154,6 +154,7 @@ public partial class MainWindow : Window
     private string? _contextPath;
     private string? _lastMeshPath;
     private readonly List<string> _previewMeshPaths = new();
+    private string? _previewScenePath;
     private readonly string _tempDir = AppPaths.TempDirectory;
     private readonly string _logDirectory = AppPaths.LogsDirectory;
     private readonly ModelAssemblyPresetService _assemblyPresetService = new();
@@ -239,6 +240,8 @@ public partial class MainWindow : Window
         if (name.Contains(".motlist.")) return "motlist";
         if (name.Contains(".mot.")) return "mot";
         if (name.Contains(".mdf2.")) return "mdf";
+        if (name.Contains(".scn.")) return "scn";
+        if (name.Contains(".pfb.")) return "pfb";
         return "other";
     }
 
@@ -1152,7 +1155,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (path == null) return;
 
         var kind = KindOf(path);
-        if (kind is "tex" or "mesh" or "motlist")
+        if (kind is "tex" or "mesh" or "motlist" or "scn" or "pfb")
         {
             _ = PreviewPathAsync(path);
             e.Handled = true;
@@ -1293,6 +1296,29 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     ClearMotionState();
                     RefreshVisconGroups();
                     ActionStatus.Text = $"模型已加载（未加载贴图） | {Viewport.StatusInfo} | {viewportMesh.VisconInfo}";
+                    break;
+                }
+                case "scn":
+                case "pfb":
+                {
+                    var result = await Task.Run(() =>
+                    {
+                        using var ms = _pak.ReadFile(path);
+                        return SceneService.Load(ms, path, OpenResource, CurrentAssemblyGameKey, loadTextures: false);
+                    });
+                    if (IsStale()) return;
+                    if (result.Mesh == null)
+                    {
+                        ActionStatus.Text = $"场景已解析：{result.ObjectCount} 个对象，引用 {result.MeshReferenceCount} 个模型，但当前资源中没有可加载的静态 Mesh（缺少 {result.MissingMeshCount}）";
+                        return;
+                    }
+                    ShowViewport();
+                    Viewport.SetMesh(result.Mesh);
+                    SetPreviewMeshPaths();
+                    _previewScenePath = path;
+                    ClearMotionState();
+                    RefreshVisconGroups();
+                    ActionStatus.Text = $"场景已加载：{result.ObjectCount} 个对象，{result.LoadedMeshCount}/{result.MeshReferenceCount} 个静态模型，{result.PrefabReferenceCount} 个 PFB 引用，缺少 {result.MissingMeshCount} 个资源";
                     break;
                 }
                 case "motlist":
@@ -1863,6 +1889,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void SetPreviewMeshPaths(params string[] paths)
     {
+        _previewScenePath = null;
         _previewMeshPaths.Clear();
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
             _previewMeshPaths.Add(path);
@@ -1959,9 +1986,42 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         // Freeze the assembled scene before taking the export snapshot. Any automatic
         // preview started by an earlier row selection is now stale and may not replace it.
         ++_previewSeq;
-        if (_pak == null || !Viewport.HasMesh || _previewMeshPaths.Count == 0)
+        if (_pak == null || !Viewport.HasMesh || (_previewMeshPaths.Count == 0 && _previewScenePath == null))
         { ActionStatus.Text = "请先在预览区加载需要导出的模型"; return; }
+        if (_previewScenePath != null)
+        {
+            await ExportPreviewSceneFbxAsync(_previewScenePath);
+            return;
+        }
         await ExportPreviewModelsFbxAsync();
+    }
+
+    private async Task ExportPreviewSceneFbxAsync(string scenePath)
+    {
+        var models = Viewport.ExportModels;
+        if (models.Count == 0) { ActionStatus.Text = "当前场景没有可导出的静态模型"; return; }
+        if (!await EnsureBlenderReadyAsync()) return;
+        var marker = scenePath.Contains(".scn.", StringComparison.OrdinalIgnoreCase) ? ".scn" : ".pfb";
+        var outputPath = Path.Combine(Path.GetFullPath(CurrentOutputDirectory), NativeStem(scenePath, marker) + "_场景.fbx");
+        var progress = BeginProgress("正在导出场景 FBX…");
+        ExportButton.IsEnabled = false;
+        try
+        {
+            await Task.Run(() =>
+            {
+                var workDir = CreateExportWorkDir("scene");
+                try
+                {
+                    var export = models.Select(model => (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups)).ToArray();
+                    new ViewportExportService().ConvertMergedToGlb(export, Path.Combine(workDir, "001_scene.glb"));
+                    RunBlenderBatch("export_models_fbx.py", CurrentBlenderPath, workDir, outputPath);
+                }
+                finally { TryDeleteDirectory(workDir); }
+            });
+            ActionStatus.Text = $"场景 FBX 已生成：{outputPath}";
+        }
+        catch (Exception ex) { ActionStatus.Text = "场景导出失败：" + ex.Message; }
+        finally { ExportButton.IsEnabled = true; EndProgress(progress); }
     }
     private async void OnExportAnimClicked(object? sender, RoutedEventArgs e)
     {
