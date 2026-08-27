@@ -934,9 +934,16 @@ public static class ViewportDataLoader
 
     private static string? ResolveNormalizedPath(Func<string, Stream?> open, string texPath, string? meshPath = null)
     {
-        var raw = texPath.Replace('\\', '/').TrimStart('/');
+        // Some MHR MDF files prefix resource references with '@'. It is a
+        // resource marker, not part of the on-disk path.
+        var raw = texPath.Replace('\\', '/').TrimStart('/', '@');
         if (raw.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
             return ResolveVersionedPath(open, raw);
+
+        // Convenience extraction sets often start directly at enemy/player/weapon
+        // instead of preserving the natives/stm prefix. Try that layout first.
+        var direct = ResolveVersionedPath(open, raw);
+        if (direct != null) return direct;
 
         // MDF texture paths are relative and the native root is game-specific. DMC5
         // stores them under natives/x64, while RE Engine STM games use natives/stm.
@@ -978,7 +985,9 @@ public static class ViewportDataLoader
         if (lastDot > 0 && p[(lastDot + 1)..].All(char.IsDigit))
         {
             using var exact = open(p);
-            return exact == null ? null : p;
+            if (exact != null) return p;
+            using var exactStreaming = open(p + ".STM");
+            return exactStreaming == null ? null : p + ".STM";
         }
 
         var roots = new[] { "natives/stm/", "natives/x64/" };
@@ -992,6 +1001,8 @@ public static class ViewportDataLoader
                 var candidate = streaming + ver;
                 using var stream = open(candidate);
                 if (stream != null) return candidate;
+                using var stmStream = open(candidate + ".STM");
+                if (stmStream != null) return candidate + ".STM";
             }
         }
         foreach (var ver in TexVersionCandidates)
@@ -999,6 +1010,8 @@ public static class ViewportDataLoader
             var candidate = p + ver;
             using var stream = open(candidate);
             if (stream != null) return candidate;
+            using var stmStream = open(candidate + ".STM");
+            if (stmStream != null) return candidate + ".STM";
         }
         return null;
     }
