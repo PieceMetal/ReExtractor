@@ -8,6 +8,7 @@ namespace ReExtractor.Gui;
 
 public partial class EnvironmentWindow : Window
 {
+    public string? SelectedAction { get; private set; }
     public EnvironmentWindow() : this(AppSettingsService.Load()) { }
 
     public EnvironmentWindow(AppSettings settings)
@@ -40,7 +41,13 @@ public partial class EnvironmentWindow : Window
     }
 
     private void OnRefreshClicked(object? sender, RoutedEventArgs e) => Refresh(AppSettingsService.Load());
-    private void OnDownloadClicked(object? sender, RoutedEventArgs e) => Close("download");
-    private void OnSettingsClicked(object? sender, RoutedEventArgs e) => Close("settings");
-    private void OnCloseClicked(object? sender, RoutedEventArgs e) => Close("close");
+    private void OnDownloadClicked(object? sender, RoutedEventArgs e) => Finish("download");
+    private void OnSettingsClicked(object? sender, RoutedEventArgs e) => Finish("settings");
+    private void OnCloseClicked(object? sender, RoutedEventArgs e) => Finish("close");
+
+    private void Finish(string action)
+    {
+        SelectedAction = action;
+        Close();
+    }
 }

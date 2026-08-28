@@ -1,0 +1,52 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ReExtractor.Gui.FullExtractWindow"
+        Icon="/Assets/AppIcon.ico" Title="全部解包 PAK"
+        Width="760" Height="500" CanResize="False"
+        WindowStartupLocation="CenterOwner" Background="#16191f">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" Margin="22">
+    <StackPanel Grid.Row="0" Margin="0,0,0,18">
+      <TextBlock Text="全部解包 PAK" FontSize="22" FontWeight="SemiBold"/>
+      <TextBlock Text="选择路径列表、PAK 所在目录和输出目录。文件将保留 natives 原始结构。"
+                 Foreground="#9aa6b5" Margin="0,6,0,0"/>
+    </StackPanel>
+
+    <Grid Grid.Row="1" ColumnDefinitions="130,Auto,Auto,*" Margin="0,0,0,12">
+      <TextBlock Grid.Column="0" Text="路径列表" VerticalAlignment="Center"/>
+      <ComboBox Grid.Column="1" x:Name="ListCombo" Width="390" HorizontalAlignment="Left"
+                SelectionChanged="OnListChanged">
+        <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Title}"/></DataTemplate></ComboBox.ItemTemplate>
+      </ComboBox>
+      <Button Grid.Column="2" Content="管理…" Click="OnManageLists" Margin="8,0,0,0"/>
+    </Grid>
+
+    <Grid Grid.Row="2" ColumnDefinitions="130,*,Auto" Margin="0,0,0,12">
+      <TextBlock Grid.Column="0" Text="PAK 所在目录" VerticalAlignment="Center"/>
+      <TextBox Grid.Column="1" x:Name="PakDirectoryBox" IsReadOnly="True" Watermark="请选择游戏或 PAK 文件夹"/>
+      <Button Grid.Column="2" Content="选择…" Click="OnChoosePakDirectory" Margin="8,0,0,0"/>
+    </Grid>
+
+    <Grid Grid.Row="3" ColumnDefinitions="130,*,Auto" Margin="0,0,0,12">
+      <TextBlock Grid.Column="0" Text="解包输出目录" VerticalAlignment="Center"/>
+      <TextBox Grid.Column="1" x:Name="OutputDirectoryBox" IsReadOnly="True" Watermark="请选择输出文件夹"/>
+      <Button Grid.Column="2" Content="选择…" Click="OnChooseOutputDirectory" Margin="8,0,0,0"/>
+    </Grid>
+
+    <Border Grid.Row="4" Background="#20252d" BorderBrush="#303947" BorderThickness="1"
+            CornerRadius="6" Padding="14" MinHeight="150" ClipToBounds="True">
+      <StackPanel>
+        <TextBlock Text="解包摘要" FontWeight="SemiBold" Margin="0,0,0,7"/>
+        <TextBlock x:Name="SummaryText" Text="请选择 PAK 所在目录" Foreground="#9cdcfe"
+                   TextWrapping="Wrap" MaxWidth="680"/>
+        <TextBlock Text="注意：完整解包可能占用大量磁盘空间和较长时间；只会导出路径列表能够识别名称的文件。"
+                   Foreground="#d7a55b" FontSize="11" TextWrapping="Wrap" MaxWidth="680" Margin="0,12,0,0"/>
+      </StackPanel>
+    </Border>
+
+    <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+      <Button Content="取消" Click="OnCancel" Padding="18,7" Margin="0,0,8,0"/>
+      <Button x:Name="StartButton" Content="开始解包" Click="OnStart" Padding="18,7"
+              Background="#0e72d8" Foreground="White" IsEnabled="False"/>
+    </StackPanel>
+  </Grid>
+</Window>

@@ -5,17 +5,18 @@
         Icon="/Assets/AppIcon.ico"
         Title="ReExtractor — RE 引擎资源工作台"
         Width="1440" Height="860" WindowState="Maximized"
+        KeyDown="OnMainWindowKeyDown"
         Background="#16191f">
 
   <DockPanel Margin="12">
-    <Border DockPanel.Dock="Top" Margin="-12,-12,-12,0" Background="#20252d"
+    <Border x:Name="TitleStrip" DockPanel.Dock="Top" Margin="-12,-12,-12,0" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,0,0,1" Padding="14,8">
       <Grid ColumnDefinitions="Auto,*">
         <TextBlock Grid.Column="0" Text="◆  RE Engine 资源工具" Foreground="#7fc3ff"
                    FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
       </Grid>
     </Border>
-    <Menu DockPanel.Dock="Top" Margin="-12,0,-12,8" Background="#1b1f26">
+    <Menu x:Name="MainMenu" DockPanel.Dock="Top" Margin="-12,0,-12,8" Background="#1b1f26">
       <MenuItem Header="文件">
         <MenuItem Header="打开 PAK 文件…" Click="OnOpenPakClicked"/>
         <MenuItem Header="加载游戏文件夹…" Click="OnSelectGameDirClicked"/>
@@ -26,13 +27,15 @@
       <MenuItem Header="资源">
         <MenuItem Header="管理路径列表…" Click="OnManageFileListsClicked"/>
         <MenuItem Header="重新加载文件树" Click="OnReloadFileTreeClicked"/>
+        <Separator/>
+        <MenuItem x:Name="ExtractAllMenuItem" Header="全部解包 PAK…" Click="OnExtractAllClicked"/>
       </MenuItem>
       <MenuItem Header="设置" Click="OnSettingsClicked"/>
       <MenuItem Header="环境" Click="OnEnvironmentClicked"/>
       <MenuItem Header="关于" Click="OnAboutClicked"/>
     </Menu>
     <!-- Fixed status bar: current state only; detailed output stays in the log panel. -->
-    <Border DockPanel.Dock="Bottom" Margin="-12,8,-12,-12" Background="#20252d"
+    <Border x:Name="StatusStrip" DockPanel.Dock="Bottom" Margin="-12,8,-12,-12" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,1,0,0" Padding="12,6">
       <Grid RowDefinitions="Auto,Auto">
         <TextBlock Grid.Row="0" x:Name="ActionStatus" Text="就绪"
@@ -47,10 +50,10 @@
     </Border>
 
     <!-- Main: left tree | splitter | center preview | splitter | right panel -->
-    <Grid ColumnDefinitions="330,5,*,5,340" RowDefinitions="*,5,180">
+    <Grid x:Name="MainLayout" ColumnDefinitions="330,5,*,5,340" RowDefinitions="*,5,180">
 
       <!-- Left: list and PAK workflow + resource tree -->
-      <DockPanel Grid.Column="0" Grid.RowSpan="3" Margin="0,0,6,0">
+      <DockPanel x:Name="LeftPanel" Grid.Column="0" Grid.RowSpan="3" Margin="0,0,6,0">
         <TextBlock DockPanel.Dock="Top" Text="路径列表 / PAK 文件" Foreground="#aab2c0"
                    FontWeight="SemiBold" Margin="0,0,0,8"/>
         <Border DockPanel.Dock="Top" Background="#20252d" BorderBrush="#303947" BorderThickness="1"
@@ -150,16 +153,16 @@
         </Panel>
       </DockPanel>
 
-      <GridSplitter Grid.Column="1" Grid.RowSpan="3" Width="5" Background="#3f3f46" HorizontalAlignment="Stretch"/>
+      <GridSplitter x:Name="LeftSplitter" Grid.Column="1" Grid.RowSpan="3" Width="5" Background="#3f3f46" HorizontalAlignment="Stretch"/>
 
       <!-- Center: preview with top toolbar + bottom playback bar -->
-      <DockPanel Grid.Column="2" Margin="6,0,6,0">
+      <DockPanel x:Name="CenterPreview" Grid.Column="2" Margin="6,0,6,0">
         <TextBlock DockPanel.Dock="Top" Text="模型与动画预览" Foreground="#aab2c0" FontWeight="SemiBold" Margin="0,0,0,7"/>
         <!-- DCC-style viewport toolbar -->
         <Border DockPanel.Dock="Top" Background="#20252d" BorderBrush="#394352" BorderThickness="1"
                 CornerRadius="6" Padding="8" Margin="0,0,0,6" ClipToBounds="True">
           <StackPanel Spacing="5">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*">
               <TextBlock Grid.Column="0" Text="视图" VerticalAlignment="Center" Margin="0,0,5,0"/>
               <ComboBox Grid.Column="1" x:Name="ViewCombo" Width="105" SelectedIndex="0"
                         SelectionChanged="OnViewportViewChanged">
@@ -176,7 +179,9 @@
               </ComboBox>
               <Button Grid.Column="5" x:Name="LoadTexturesButton" Content="加载贴图" Click="OnLoadTexturesClicked" Margin="8,0,0,0"
                       ToolTip.Tip="默认只加载模型；需要材质贴图时再点击"/>
-              <TextBlock Grid.Column="6" x:Name="FpsText" Text="" VerticalAlignment="Center" HorizontalAlignment="Right"
+              <Button Grid.Column="6" Content="全屏（F11）" Click="OnViewportFullscreenClicked" Margin="8,0,0,0"
+                      ToolTip.Tip="隐藏工具面板并让用户视图全屏；再次按 F11 退出"/>
+              <TextBlock Grid.Column="7" x:Name="FpsText" Text="" VerticalAlignment="Center" HorizontalAlignment="Right"
                          Margin="10,0,0,0" Foreground="#9cdcfe" TextTrimming="CharacterEllipsis"/>
             </Grid>
             <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
@@ -255,10 +260,10 @@
         </Border>
       </DockPanel>
 
-      <GridSplitter Grid.Column="3" Grid.RowSpan="3" Width="5" Background="#3f3f46" HorizontalAlignment="Stretch"/>
+      <GridSplitter x:Name="RightSplitter" Grid.Column="3" Grid.RowSpan="3" Width="5" Background="#3f3f46" HorizontalAlignment="Stretch"/>
 
       <!-- Right: operation panels -->
-      <DockPanel Grid.Column="4" Grid.RowSpan="3" Margin="6,0,0,0">
+      <DockPanel x:Name="RightPanel" Grid.Column="4" Grid.RowSpan="3" Margin="6,0,0,0">
         <!-- 模型组固定在右上方；Mac 触控板滚动下方内容时不再把它一起卷走。 -->
         <TabControl DockPanel.Dock="Top" Margin="0,0,0,10">
           <TabItem Header="模型组" FontSize="13" Padding="9,5">
@@ -284,10 +289,18 @@
                 </ListBox.Styles>
                 <ListBox.ItemTemplate>
                   <DataTemplate>
-                    <CheckBox Content="{Binding Display}" IsChecked="{Binding IsVisible, Mode=OneWay}"
-                              Tag="{Binding Key}" Click="OnVisconGroupClicked"
-                              ToolTip.Tip="{Binding MaterialTip}" Margin="2,1" Padding="4,3"
-                              HorizontalAlignment="Stretch"/>
+                    <Border ToolTip.Tip="{Binding MaterialTip}" Margin="2,1" Padding="4,3"
+                            Background="Transparent" HorizontalAlignment="Stretch">
+                      <Grid ColumnDefinitions="Auto,*">
+                        <!-- Keep the visibility toggle hit target limited to the box itself.
+                             Clicking the label/row only selects the ListBoxItem. -->
+                        <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible, Mode=OneWay}"
+                                  Tag="{Binding Key}" Click="OnVisconGroupClicked"
+                                  VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Display}" Margin="7,0,0,0"
+                                   VerticalAlignment="Center" IsHitTestVisible="False"/>
+                      </Grid>
+                    </Border>
                   </DataTemplate>
                 </ListBox.ItemTemplate>
               </ListBox>
@@ -392,7 +405,7 @@
               <Border Background="#1b222b" BorderBrush="#354354" BorderThickness="1"
                       CornerRadius="5" Padding="8" Margin="0,0,0,6">
                 <StackPanel>
-                  <TextBlock Text="模型组装预设（按游戏分类）"
+                  <TextBlock Text="模型组装预设"
                              Foreground="#9cdcfe" FontWeight="SemiBold" Margin="0,0,0,5"/>
                   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
                     <TextBox Grid.Column="0" x:Name="AssemblyPresetNameBox"
@@ -510,7 +523,7 @@
           </StackPanel>
         </ScrollViewer>
       </DockPanel>
-      <GridSplitter Grid.Row="1" Grid.Column="2" Height="5" Margin="6,0,6,0"
+      <GridSplitter x:Name="LogSplitter" Grid.Row="1" Grid.Column="2" Height="5" Margin="6,0,6,0"
                     Background="#3f3f46" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                     ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" Cursor="SizeNorthSouth"/>
 

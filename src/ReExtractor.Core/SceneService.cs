@@ -46,16 +46,20 @@ public static class SceneService
         var meshes = new List<ViewportMesh>();
         foreach (var instance in instances)
         {
-            using var stream = OpenVersioned(openResource, instance.Path);
-            if (stream == null) { missing.Add(instance.Path); continue; }
+            var opened = OpenVersioned(openResource, instance.Path);
+            if (opened == null) { missing.Add(instance.Path); continue; }
+            using var stream = opened.Value.Stream;
             try
             {
-                var mesh = ViewportDataLoader.LoadMesh(stream, instance.Path, 1, openResource, loadTextures);
+                // FileHandler derives the RE serializer version from the resolved filename.
+                // Passing the extension-less SCN reference here makes valid SF6 meshes parse
+                // with file version 0 and eventually seek outside the stream.
+                var mesh = ViewportDataLoader.LoadMesh(stream, opened.Value.Path, 1, openResource, loadTextures);
                 // Animated/skinned characters are resources, not reliable static scene geometry.
                 if (mesh.Bones.Length > 0) continue;
                 meshes.Add(mesh.WithTransform(instance.Transform));
             }
-            catch { missing.Add(instance.Path); }
+            catch (Exception ex) { missing.Add($"{instance.Path} — {ex.Message}"); }
         }
 
         return new SceneLoadResult(meshes.Count == 0 ? null : ViewportMesh.Merge(meshes), objectCount,
@@ -90,14 +94,21 @@ public static class SceneService
         foreach (var child in gameObject.GetChildren()) Collect(child, world, output, ref objectCount);
     }
 
-    private static Stream? OpenVersioned(Func<string, Stream?> opener, string path)
+    private static (Stream Stream, string Path)? OpenVersioned(Func<string, Stream?> opener, string path)
     {
-        var direct = opener(path);
-        if (direct != null) return direct;
-        foreach (var suffix in new[] { ".241111606", ".240423143", ".230110883", ".221108797", ".2109148288", ".2101050001", ".1902042334", ".1808312334", ".1808282334" })
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        var roots = normalized.StartsWith("natives/", StringComparison.OrdinalIgnoreCase)
+            ? new[] { normalized }
+            : new[] { normalized, "natives/stm/" + normalized, "natives/x64/" + normalized };
+        foreach (var rootedPath in roots)
         {
-            var stream = opener(path + suffix);
-            if (stream != null) return stream;
+            var direct = opener(rootedPath);
+            if (direct != null) return (direct, rootedPath);
+            foreach (var suffix in new[] { ".241111606", ".240423143", ".230110883", ".221108797", ".2109148288", ".2101050001", ".1902042334", ".1808312334", ".1808282334" })
+            {
+                var stream = opener(rootedPath + suffix);
+                if (stream != null) return (stream, rootedPath + suffix);
+            }
         }
         return null;
     }

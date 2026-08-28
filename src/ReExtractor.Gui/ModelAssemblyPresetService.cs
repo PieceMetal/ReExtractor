@@ -38,7 +38,7 @@ public sealed class ModelAssemblyPresetService
         PropertyNameCaseInsensitive = true,
     };
 
-    public string RootDirectory { get; } = Path.Combine(AppPaths.PresetsDirectory, "model-assemblies");
+    public string RootDirectory { get; } = AppPaths.PresetsDirectory;
 
     public ModelAssemblyPresetService()
     {
@@ -123,22 +123,37 @@ public sealed class ModelAssemblyPresetService
     }
 
     public string GetGameDirectory(string gameKey) =>
-        Path.Combine(RootDirectory, SanitizeFileName(gameKey));
+        Path.Combine(RootDirectory, SanitizeFileName(gameKey), "model-assemblies");
 
     private void MigrateLegacyPresets()
     {
-        var legacyRoot = Path.Combine(AppPaths.WorkDirectory, "presets", "model-assemblies");
-        if (!Directory.Exists(legacyRoot) ||
-            Path.GetFullPath(legacyRoot).Equals(Path.GetFullPath(RootDirectory), StringComparison.OrdinalIgnoreCase))
-            return;
-
-        foreach (var file in Directory.EnumerateFiles(legacyRoot, "*.json", SearchOption.AllDirectories))
+        var legacyRoots = new[]
         {
-            var relative = Path.GetRelativePath(legacyRoot, file);
-            var destination = Path.Combine(RootDirectory, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            if (!File.Exists(destination))
-                File.Copy(file, destination);
+            Path.Combine(AppPaths.PresetsDirectory, "model-assemblies"),
+            Path.Combine(AppPaths.WorkDirectory, "presets", "model-assemblies"),
+        };
+        foreach (var legacyRoot in legacyRoots.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(legacyRoot)) continue;
+            foreach (var file in Directory.EnumerateFiles(legacyRoot, "*.json", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var preset = JsonSerializer.Deserialize<ModelAssemblyPreset>(
+                        File.ReadAllText(file), JsonOptions);
+                    var gameKey = !string.IsNullOrWhiteSpace(preset?.GameKey)
+                        ? preset.GameKey
+                        : new DirectoryInfo(Path.GetDirectoryName(file)!).Name;
+                    var destinationDirectory = GetGameDirectory(gameKey);
+                    Directory.CreateDirectory(destinationDirectory);
+                    var destination = Path.Combine(destinationDirectory, Path.GetFileName(file));
+                    if (!File.Exists(destination)) File.Copy(file, destination);
+                }
+                catch
+                {
+                    // Keep damaged legacy files untouched instead of blocking startup.
+                }
+            }
         }
     }
 

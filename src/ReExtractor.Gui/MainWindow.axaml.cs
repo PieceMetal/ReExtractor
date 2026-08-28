@@ -164,6 +164,7 @@ public partial class MainWindow : Window
     private string? _loadedFolderPath;
     private bool _syncingManagedList;
     private readonly IDisposable? _actionStatusLogSubscription;
+    private EnvironmentWindow? _environmentWindow;
     private ViewportBone[]? _boneTreeSource;
     private BoneTreeNode? _selectedBoneTreeNode;
     private List<BoneTreeNode> _boneTreeRoots = new();
@@ -174,12 +175,25 @@ public partial class MainWindow : Window
         InitializeComponent();
         Directory.CreateDirectory(_tempDir);
         Directory.CreateDirectory(_logDirectory);
-        GameDirBox.Text = _settings.LastGameDirectory;
         RefreshManagedLists(_settings.LastListPath);
+        if (ManagedListCombo.SelectedItem is ManagedFileList)
+        {
+            GameDirBox.Text = _settings.LastGameDirectory;
+        }
+        else
+        {
+            // A game path without a path list cannot be loaded meaningfully and
+            // makes the two fields look associated when they are not.
+            GameDirBox.Text = "";
+            _settings.LastGameDirectory = "";
+        }
+        AppSettingsService.Save(_settings);
         RefreshAssemblyPresetHint();
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnWindowDragOver);
         AddHandler(DragDrop.DropEvent, OnWindowDrop);
+        AddHandler(PointerPressedEvent, OnMainWindowOutsideEnvironmentPressed,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
 
         // tunnel phase: runs BEFORE the tree/listbox handles the click and changes selection,
         // so right-click selection can be told apart from left-click preview
@@ -378,12 +392,21 @@ public partial class MainWindow : Window
     private void RefreshManagedLists(string? selectPath = null)
     {
         var lists = new FileListManagerService().GetLocalLists();
+        var selected = lists.FirstOrDefault(item =>
+            !string.IsNullOrWhiteSpace(selectPath) &&
+            Path.GetFullPath(item.FilePath).Equals(Path.GetFullPath(selectPath),
+                StringComparison.OrdinalIgnoreCase)) ?? lists.FirstOrDefault();
         _syncingManagedList = true;
         ManagedListCombo.ItemsSource = lists;
-        ManagedListCombo.SelectedItem = lists.FirstOrDefault(item =>
-            !string.IsNullOrWhiteSpace(selectPath) &&
-            Path.GetFullPath(item.FilePath).Equals(Path.GetFullPath(selectPath), StringComparison.OrdinalIgnoreCase));
+        ManagedListCombo.SelectedItem = selected;
         _syncingManagedList = false;
+        _settings.LastListPath = selected?.FilePath ?? "";
+        if (selected == null)
+        {
+            GameDirBox.Text = "";
+            _settings.LastGameDirectory = "";
+        }
+        AppSettingsService.Save(_settings);
     }
 
     private async Task<string?> ChooseGameDirectoryAsync()
@@ -446,6 +469,8 @@ public partial class MainWindow : Window
         else
         {
             RefreshManagedLists(SelectedListPath);
+            await TryAutoSelectGameDirectoryForListAsync(
+                ManagedListCombo.SelectedItem as ManagedFileList);
         }
     }
 
@@ -724,6 +749,20 @@ public partial class MainWindow : Window
             yield return pak;
     }
 
+    private static string FormatByteSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = Math.Max(0, bytes);
+        var unit = 0;
+        var display = (double)value;
+        while (display >= 1024 && unit < units.Length - 1)
+        {
+            display /= 1024;
+            unit++;
+        }
+        return $"{display:N1} {units[unit]}";
+    }
+
     private static IEnumerable<string> EnumerateFilesShallow(string root, string pattern, int maxDepth)
     {
         if (maxDepth < 0 || !Directory.Exists(root)) yield break;
@@ -755,7 +794,21 @@ public partial class MainWindow : Window
 
     private async Task ShowEnvironmentWindowAsync()
     {
-        var action = await new EnvironmentWindow(_settings).ShowDialog<string?>(this);
+        if (_environmentWindow != null)
+        {
+            _environmentWindow.Activate();
+            return;
+        }
+        var window = new EnvironmentWindow(_settings);
+        _environmentWindow = window;
+        var closed = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_environmentWindow, window)) _environmentWindow = null;
+            closed.TrySetResult(window.SelectedAction);
+        };
+        window.Show(this);
+        var action = await closed.Task;
         if (action == "download")
         {
             OpenExternalUrl("https://www.blender.org/download/");
@@ -768,6 +821,14 @@ public partial class MainWindow : Window
             return;
         }
 
+    }
+
+    private void OnMainWindowOutsideEnvironmentPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // This handler belongs to the main window, so clicks inside the environment
+        // window never arrive here. Closing only on an actual main-window click avoids
+        // treating Alt-Tab, clicking the desktop, or switching apps as an outside click.
+        _environmentWindow?.Close();
     }
 
     private async Task OpenSettingsDialogAsync()
@@ -806,6 +867,111 @@ public partial class MainWindow : Window
     {
         var folder = await ChooseResourceFolderAsync();
         if (folder != null) await LoadExtractedFolderAsync(folder);
+    }
+
+    private async void OnExtractAllClicked(object? sender, RoutedEventArgs e)
+    {
+        var lists = new FileListManagerService().GetLocalLists();
+        var previouslySelectedList = SelectedListPath;
+        var request = await new FullExtractWindow(lists,
+            ManagedListCombo.SelectedItem as ManagedFileList,
+            GameDirBox.Text?.Trim() ?? "",
+            Path.Combine(CurrentOutputDirectory, "unpacked"),
+            async list => (await Task.Run(() => FindMatchingGameDirectory(list)))?.Directory)
+            .ShowDialog<FullExtractRequest?>(this);
+
+        // The extraction window can download/import/delete lists through its
+        // manager. Reload the shared library after it closes so the main combo
+        // never keeps the stale snapshot it had before opening the dialog.
+        var refreshedSelection = request?.ListFile ?? previouslySelectedList;
+        RefreshManagedLists(refreshedSelection);
+        if (request != null)
+        {
+            _settings.LastListPath = request.ListFile;
+            _settings.LastGameDirectory = request.PakDirectory;
+            GameDirBox.Text = request.PakDirectory;
+            AppSettingsService.Save(_settings);
+        }
+        if (request == null)
+        {
+            await TryAutoSelectGameDirectoryForListAsync(
+                ManagedListCombo.SelectedItem as ManagedFileList);
+            return;
+        }
+
+        var listFile = request.ListFile;
+        var pakDirectory = request.PakDirectory;
+        var pakPaths = FindPakFiles(pakDirectory)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Keep root/base archives first and nested DLC/patch archives later.
+            // PakService searches in reverse, so later archives correctly win.
+            .OrderBy(path => Path.GetRelativePath(pakDirectory, path)
+                .Count(ch => ch is '\\' or '/'))
+            .ThenBy(path => Path.GetRelativePath(pakDirectory, path),
+                StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (pakPaths.Length == 0)
+        {
+            ActionStatus.Text = "所选目录及其子目录中没有找到 PAK 文件";
+            return;
+        }
+
+        var output = request.OutputDirectory;
+        var progress = BeginProgress("正在读取 PAK 文件表…");
+        ExtractAllMenuItem.IsEnabled = false;
+        ActionStatus.Text = $"正在扫描 {pakPaths.Length} 个 PAK：{pakDirectory}";
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                var source = new PakService();
+                foreach (var path in pakPaths) source.AddPak(path);
+                source.LoadListFile(listFile);
+                var entries = source.EnumerateFiles();
+                var total = entries.Count;
+                if (total == 0)
+                    throw new InvalidDataException(
+                        "没有找到可识别的资源，请检查路径列表是否与所选游戏及版本匹配");
+                var requiredBytes = entries.Aggregate(0L, (sum, entry) =>
+                    entry.DecompressedSize > long.MaxValue - sum
+                        ? long.MaxValue
+                        : sum + Math.Max(0, entry.DecompressedSize));
+                var outputRoot = Path.GetPathRoot(Path.GetFullPath(output));
+                if (!string.IsNullOrWhiteSpace(outputRoot))
+                {
+                    var availableBytes = new DriveInfo(outputRoot).AvailableFreeSpace;
+                    if (requiredBytes > availableBytes)
+                        throw new IOException(
+                            $"输出盘空间不足：预计需要 {FormatByteSize(requiredBytes)}，当前可用 {FormatByteSize(availableBytes)}");
+                }
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    WorkProgress.Maximum = Math.Max(1, total);
+                    UpdateProgress(progress, 0,
+                        $"准备解包 0/{total}（约 {FormatByteSize(requiredBytes)}）");
+                });
+                var extraction = source.ExtractAllKnown(output, (current, path) =>
+                {
+                    if (current == 1 || current == total || current % 50 == 0)
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                            UpdateCountProgress(progress, current, total, $"全部解包 · {Path.GetFileName(path)}"));
+                });
+                return (extraction, total);
+            });
+            foreach (var failure in result.extraction.Failures) AppendLog("全部解包失败：" + failure);
+            ActionStatus.Text = result.extraction.Failed == 0
+                ? $"全部解包完成：{result.extraction.Exported:N0} 个文件 | {output}"
+                : $"全部解包完成：成功 {result.extraction.Exported:N0}，失败 {result.extraction.Failed:N0}（详见日志） | {output}";
+        }
+        catch (Exception ex)
+        {
+            ActionStatus.Text = "全部解包失败：" + ex.Message;
+        }
+        finally
+        {
+            ExtractAllMenuItem.IsEnabled = true;
+            EndProgress(progress);
+        }
     }
 
     private void OnWindowDragOver(object? sender, DragEventArgs e)
@@ -887,8 +1053,19 @@ public partial class MainWindow : Window
 
             _loadedPakPaths.Clear();
             _loadedFolderPath = folder;
+            // A loose/extracted folder is an independent resource source. Clear the
+            // PAK-only selectors so the UI cannot imply that this tree came from the
+            // previously selected list/game installation.
+            _syncingManagedList = true;
+            ManagedListCombo.SelectedItem = null;
+            ManagedListCombo.SelectedIndex = -1;
+            _syncingManagedList = false;
+            GameDirBox.Text = "";
+            _settings.LastListPath = "";
+            _settings.LastGameDirectory = "";
+            AppSettingsService.Save(_settings);
             RefreshAssemblyPresetHint();
-            StatusText.Text = $"解包文件夹 · {entries.Count:N0} 个文件";
+            StatusText.Text = $"自定义已解包文件夹 · {entries.Count:N0} 个文件";
             ActionStatus.Text = $"解包文件夹加载完成：{folder}";
         }
         catch (Exception ex)
@@ -1668,6 +1845,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     }
 
     private bool _syncingVisconUi;
+    private bool _viewportFullscreen;
+    private WindowState _windowStateBeforeViewportFullscreen;
+    private bool _logWasVisibleBeforeViewportFullscreen;
 
     private void RefreshVisconGroups(int? selectKey = null)
     {
@@ -1701,11 +1881,51 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var row = (VisconGroupList.ItemsSource as IEnumerable<VisconGroupRow>)?.FirstOrDefault(x => x.Key == key);
         if (row != null) VisconGroupList.SelectedItem = row;
         Viewport.SetPrimaryGroupVisible(key, check.IsChecked == true);
-        var total = (VisconGroupList.ItemsSource as IEnumerable<VisconGroupRow>)?.Count() ?? 0;
-        VisconGroupSummaryText.Text = total == 0
-            ? "未加载"
-            : $"{Viewport.VisiblePrimaryGroups.Count}/{total} 可见";
+        // Rows are immutable snapshots. Rebuild immediately so virtualization or a later
+        // repaint cannot restore the old check mark while the renderer keeps the new state.
+        RefreshVisconGroups(key);
         ActionStatus.Text = $"模型组已更新 | {Viewport.StatusInfo} | 按（F）可按当前可见组重新取景";
+    }
+
+    private void OnViewportFullscreenClicked(object? sender, RoutedEventArgs e) => ToggleViewportFullscreen();
+
+    private void OnMainWindowKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.F11) return;
+        ToggleViewportFullscreen();
+        e.Handled = true;
+    }
+
+    private void ToggleViewportFullscreen()
+    {
+        _viewportFullscreen = !_viewportFullscreen;
+        if (_viewportFullscreen)
+        {
+            _windowStateBeforeViewportFullscreen = WindowState;
+            _logWasVisibleBeforeViewportFullscreen = LogPanel.IsVisible;
+            TitleStrip.IsVisible = MainMenu.IsVisible = StatusStrip.IsVisible = false;
+            LeftPanel.IsVisible = LeftSplitter.IsVisible = RightSplitter.IsVisible = RightPanel.IsVisible = false;
+            LogSplitter.IsVisible = LogPanel.IsVisible = false;
+            Grid.SetColumn(CenterPreview, 0);
+            Grid.SetColumnSpan(CenterPreview, 5);
+            Grid.SetRowSpan(CenterPreview, 3);
+            CenterPreview.Margin = new Thickness(0);
+            WindowState = WindowState.FullScreen;
+            ActionStatus.Text = "用户视图已全屏；按 F11 退出";
+        }
+        else
+        {
+            WindowState = _windowStateBeforeViewportFullscreen;
+            Grid.SetColumn(CenterPreview, 2);
+            Grid.SetColumnSpan(CenterPreview, 1);
+            Grid.SetRowSpan(CenterPreview, 1);
+            CenterPreview.Margin = new Thickness(6, 0, 6, 0);
+            TitleStrip.IsVisible = MainMenu.IsVisible = StatusStrip.IsVisible = true;
+            LeftPanel.IsVisible = LeftSplitter.IsVisible = RightSplitter.IsVisible = RightPanel.IsVisible = true;
+            LogSplitter.IsVisible = LogPanel.IsVisible = _logWasVisibleBeforeViewportFullscreen;
+            ActionStatus.Text = "已退出用户视图全屏";
+        }
+        Viewport.Refresh();
     }
 
     private void OnVisconSelectionChanged(object? sender, SelectionChangedEventArgs e)

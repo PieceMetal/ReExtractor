@@ -7,6 +7,7 @@ namespace ReExtractor.Core;
 /// A resolved file entry inside one or more PAK archives.
 /// </summary>
 public sealed record PakEntryInfo(string Path, long DecompressedSize, long CompressedSize, string SourcePak);
+public sealed record PakExtractionResult(int Exported, int Failed, IReadOnlyList<string> Failures);
 
 /// <summary>
 /// Wraps REE-Lib PAK reading: multi-PAK priority (base + patches) and list-file path resolution.
@@ -160,6 +161,58 @@ public sealed class PakService
             ms.CopyTo(fs);
         ms.Dispose();
         return outPath;
+    }
+
+    /// <summary>Extract every list-resolved entry while opening each PAK only once.</summary>
+    public PakExtractionResult ExtractAllKnown(string outputDir,
+        Action<int, string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        if (_pakFiles.Count == 0) throw new InvalidOperationException("当前没有已加载的 PAK");
+        var root = Path.GetFullPath(outputDir);
+        Directory.CreateDirectory(root);
+        var rootPrefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var seen = new HashSet<ulong>();
+        var failures = new List<string>();
+        var exported = 0;
+        var failed = 0;
+
+        // Patches win: extract the first occurrence while traversing newest to oldest.
+        for (var pakIndex = _pakFiles.Count - 1; pakIndex >= 0; pakIndex--)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var pak = new PakFile { filepath = _pakFiles[pakIndex] };
+            pak.ReadContents(_pakFiles[pakIndex], _knownPaths);
+            foreach (var entry in pak.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (entry.path == null || !seen.Add(entry.CombinedHash)) continue;
+                string? target = null;
+                try
+                {
+                    var relative = entry.path.Replace('/', Path.DirectorySeparatorChar)
+                        .Replace('\\', Path.DirectorySeparatorChar);
+                    if (Path.IsPathRooted(relative)) throw new InvalidDataException("资源路径不能是绝对路径");
+                    target = Path.GetFullPath(Path.Combine(root, relative));
+                    if (!target.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("资源路径超出输出目录");
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    using var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None);
+                    pak.Read(entry, output);
+                    exported++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    if (target != null && File.Exists(target))
+                    {
+                        try { File.Delete(target); } catch { }
+                    }
+                    if (failures.Count < 200) failures.Add($"{entry.path}: {ex.Message}");
+                }
+                progress?.Invoke(exported + failed, entry.path);
+            }
+        }
+        return new PakExtractionResult(exported, failed, failures);
     }
 
     private static List<FolderMount> DetectFolderMounts(string root)
