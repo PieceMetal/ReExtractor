@@ -1,5 +1,6 @@
 using BCnEncoder.Decoder;
 using BCnEncoder.Shared;
+using GDeflateNet;
 using ReeLib;
 using ReeLib.DDS;
 using SixLabors.ImageSharp;
@@ -35,7 +36,7 @@ public sealed class TexService
     /// <summary>Decode mip 0 of a .tex stream into an RGBA32 image (diagnostics discarded).</summary>
     public Image<Rgba32> DecodeToImage(Stream texStream, string nativePath)
     {
-        var (img, _) = DecodeToImageDiag(texStream, nativePath);
+        var (img, _) = DecodeToImageCore(texStream, nativePath, collectDiagnostics: false);
         return img;
     }
 
@@ -43,10 +44,38 @@ public sealed class TexService
     /// Decode mip 0 and return diagnostics alongside the image. Used by the GUI TEX_DEBUG panel.
     /// </summary>
     public (Image<Rgba32> Image, TexDiagnostics Diag) DecodeToImageDiag(Stream texStream, string nativePath)
+        => DecodeToImageCore(texStream, nativePath, collectDiagnostics: true);
+
+    private (Image<Rgba32> Image, TexDiagnostics Diag) DecodeToImageCore(
+        Stream texStream, string nativePath, bool collectDiagnostics)
     {
+        // GDeflate decompression replaces the compressed mip payload in-place in
+        // ReeLib's FileHandler. PAK reads already return a writable MemoryStream,
+        // whereas an extracted-folder texture arrives as a read-only FileStream.
+        // Copy the latter before parsing so newer GDeflate games (Wilds, MHS3,
+        // RE9) decode identically from either source.
+        using var writableCopy = texStream.CanWrite ? null : new MemoryStream();
+        if (writableCopy != null)
+        {
+            if (texStream.CanSeek) texStream.Position = 0;
+            texStream.CopyTo(writableCopy);
+            writableCopy.Position = 0;
+            texStream = writableCopy;
+        }
+
         var tex = new TexFile(new FileHandler(texStream, nativePath));
         if (!tex.Read())
             throw new InvalidDataException($"Failed to parse .tex: {nativePath}");
+
+        // MHWILDS and newer RE Engine games store the mip payloads in GDeflate
+        // tiles.  TexFile exposes the compressed mip table, but its iterator reads
+        // the payload as if it were already decompressed, which produces the
+        // characteristic rainbow noise when sent straight to a BC decoder.
+        if (tex.IsCompressed)
+        {
+            tex.DecompressGDeflate((_, compressed, decompressed) =>
+                GDeflate.Decompress(compressed.ToArray(), decompressed));
+        }
 
         var w = Math.Max(1, (int)tex.Header.width);
         var h = Math.Max(1, (int)tex.Header.height);
@@ -64,18 +93,19 @@ public sealed class TexService
         if (format.IsBlockCompressedFormat())
         {
             diag.Branch = "BCnEncoder (CreateIterator + DecodeRaw2D)";
-            return DecodeCompressed(tex, w, h, format, diag);
+            return DecodeCompressed(tex, w, h, format, diag, collectDiagnostics);
         }
 
         // Uncompressed
         diag.Branch = "iterator (uncompressed)";
-        return DecodeUncompressed(tex, w, h, format, diag);
+        return DecodeUncompressed(tex, w, h, format, diag, collectDiagnostics);
     }
 
     /// <summary>
     /// For block-compressed textures (BC1-BC7): use CreateIterator (padding-safe) + BCnEncoder.
     /// </summary>
-    private static (Image<Rgba32> Image, TexDiagnostics Diag) DecodeCompressed(TexFile tex, int width, int height, DxgiFormat format, TexDiagnostics diag)
+    private static (Image<Rgba32> Image, TexDiagnostics Diag) DecodeCompressed(
+        TexFile tex, int width, int height, DxgiFormat format, TexDiagnostics diag, bool collectDiagnostics)
     {
         using var iter = tex.CreateIterator(0, 0);
         var mip = new DDSFile.MipMapLevelData();
@@ -99,14 +129,15 @@ public sealed class TexService
                 pixels[y * w + x] = new Rgba32(c.r, c.g, c.b, c.a);
             }
         var img = Image.LoadPixelData<Rgba32>(pixels, w, h);
-        ComputePixelStats(img, diag);
+        if (collectDiagnostics) ComputePixelStats(img, diag);
         return (img, diag);
     }
 
     /// <summary>
     /// For uncompressed textures: read via iterator (padding-safe), then convert pixel format.
     /// </summary>
-    private static (Image<Rgba32> Image, TexDiagnostics Diag) DecodeUncompressed(TexFile tex, int width, int height, DxgiFormat format, TexDiagnostics diag)
+    private static (Image<Rgba32> Image, TexDiagnostics Diag) DecodeUncompressed(
+        TexFile tex, int width, int height, DxgiFormat format, TexDiagnostics diag, bool collectDiagnostics)
     {
         using var iter = tex.CreateIterator(0, 0);
         var mip = new DDSFile.MipMapLevelData();
@@ -146,7 +177,7 @@ public sealed class TexService
                 throw new NotSupportedException($"Unsupported DXGI format: {format} ({(int)format})");
         }
         var img = Image.LoadPixelData<Rgba32>(pixels, w, h);
-        ComputePixelStats(img, diag);
+        if (collectDiagnostics) ComputePixelStats(img, diag);
         return (img, diag);
     }
 

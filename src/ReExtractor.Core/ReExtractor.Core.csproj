@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\RE-Engine-Lib\REE-Lib\REE-Lib.csproj" />
+    <ProjectReference Include="..\..\GDeflateNet\GDeflateNet\GDeflateNet.csproj" />
   </ItemGroup>
 
   <ItemGroup>

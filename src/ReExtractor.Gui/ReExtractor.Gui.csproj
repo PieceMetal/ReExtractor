@@ -39,12 +39,32 @@
     <ProjectReference Include="..\ReExtractor.Core\ReExtractor.Core.csproj" />
   </ItemGroup>
 
+  <!-- GDeflateNet uses a native libdeflate wrapper. Keep the DLL beside the
+       single-file GUI so its DllImport resolver can load compressed MHW TEX
+       files after publishing (content is not embedded by IncludeNativeLibrariesForSelfExtract). -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64' Or '$(RuntimeIdentifier)' == ''">
+    <Content Include="..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll"
+             Link="libGDeflate.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="..\..\tools\export_models_fbx.py" Link="EmbeddedTools\export_models_fbx.py" />
     <EmbeddedResource Include="..\..\tools\export_animations_fbx.py" Link="EmbeddedTools\export_animations_fbx.py" />
   </ItemGroup>
 
+  <!-- PublishSingleFile bundles ordinary Content items into the executable, but
+       GDeflateNet's resolver needs the native DLL as a real neighboring file. -->
+  <Target Name="CopyGDeflateNativeAfterPublish" AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <Target Name="RemovePublishSymbols" AfterTargets="Publish">
     <Delete Files="@(ResolvedFileToPublish->WithMetadataValue('Extension', '.pdb')->'%(FullPath)')" />
     <Delete Files="$([System.IO.Directory]::GetFiles('$(PublishDir)', '*.pdb', System.IO.SearchOption.TopDirectoryOnly))" />
-  </Target></Project>
+  </Target>
+</Project>

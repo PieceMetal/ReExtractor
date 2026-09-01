@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 
 namespace ReExtractor.Gui;
@@ -13,4 +14,16 @@ public partial class AboutWindow : Window
     }
 
     private void OnCloseClicked(object? sender, RoutedEventArgs e) => Close();
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            Close();
+            return;
+        }
+
+        base.OnKeyDown(e);
+    }
 }

@@ -1888,8 +1888,6 @@ public sealed class GlViewport : OpenGlControlBase
 
     }
 
-
-
     private static Matrix4x4 EvaluateLocal(BoneTrack track, float time, Matrix4x4 bindLocal)
 
     {

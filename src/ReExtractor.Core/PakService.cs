@@ -17,6 +17,10 @@ public sealed class PakService
     private readonly List<string> _pakFiles = new();
     private readonly List<FolderMount> _folderMounts = new();
     private readonly Dictionary<ulong, string> _knownPaths = new();
+    // Built while populating the GUI tree. Maps every PAK entry hash to its
+    // highest-priority source PAK, so preview texture reads do not rescan all patches.
+    private readonly Dictionary<ulong, int> _pakEntrySources = new();
+    private bool _pakEntryIndexReady;
     private readonly Dictionary<string, FolderFile> _folderFiles =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _folderAliases =
@@ -30,6 +34,8 @@ public sealed class PakService
     {
         if (!File.Exists(pakPath)) throw new FileNotFoundException("PAK not found", pakPath);
         _pakFiles.Add(pakPath);
+        _pakEntrySources.Clear();
+        _pakEntryIndexReady = false;
     }
 
     /// <summary>
@@ -95,6 +101,8 @@ public sealed class PakService
     {
         var result = new List<PakEntryInfo>();
         var seen = new HashSet<ulong>();
+        _pakEntrySources.Clear();
+        _pakEntryIndexReady = false;
 
         // A folder is already path-addressable, so it does not require a .list.
         // Later folder mounts win over earlier mounts, matching patch PAK priority.
@@ -118,14 +126,19 @@ public sealed class PakService
             pak.ReadContents(_pakFiles[i], _knownPaths);
             foreach (var entry in pak.Entries)
             {
+                // We iterate newest to oldest, so the first source wins just like the
+                // visible resource tree. Keep entries with unknown paths too: material
+                // references can still resolve by hash even when a list file omitted them.
+                _pakEntrySources.TryAdd(entry.CombinedHash, i);
                 if (entry.path == null || !seen.Add(entry.CombinedHash)) continue;
                 result.Add(new PakEntryInfo(
                     entry.path,
                     entry.decompressedSize,
                     entry.compressedSize,
-                    Path.GetFileName(_pakFiles[i])));
+                Path.GetFileName(_pakFiles[i])));
             }
         }
+        _pakEntryIndexReady = true;
         return result.OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -136,19 +149,43 @@ public sealed class PakService
             return folderStream;
 
         var hash = PakUtils.GetFilepathHash(nativePath);
+        if (_pakEntrySources.TryGetValue(hash, out var cachedPakIndex))
+        {
+            var cached = TryReadPakFile(cachedPakIndex, hash);
+            if (cached != null) return cached;
+            // The archive changed after indexing. Drop the stale route and fall back to
+            // a full lookup once, so a valid resource is never hidden by the cache.
+            _pakEntrySources.Remove(hash);
+        }
+
+        // The GUI always builds the PAK table before previewing. Once that pass has
+        // completed, a failed candidate (for example one of many TEX version suffixes)
+        // can be rejected immediately instead of reopening every patch PAK.
+        if (_pakEntryIndexReady)
+            throw new FileNotFoundException($"Entry not found in any loaded PAK: {nativePath}");
+
         for (var i = _pakFiles.Count - 1; i >= 0; i--)
         {
-            using var pak = new PakFile { filepath = _pakFiles[i] };
-            pak.ReadContents(_pakFiles[i], _knownPaths);
-            var entry = pak.Entries.FirstOrDefault(e => e.CombinedHash == hash);
-            if (entry == null) continue;
-
-            var ms = new MemoryStream((int)entry.decompressedSize);
-            pak.Read(entry, ms);
-            ms.Position = 0;
-            return ms;
+            var stream = TryReadPakFile(i, hash);
+            if (stream == null) continue;
+            _pakEntrySources[hash] = i;
+            return stream;
         }
         throw new FileNotFoundException($"Entry not found in any loaded PAK: {nativePath}");
+    }
+
+    private MemoryStream? TryReadPakFile(int pakIndex, ulong hash)
+    {
+        if ((uint)pakIndex >= (uint)_pakFiles.Count) return null;
+        using var pak = new PakFile { filepath = _pakFiles[pakIndex] };
+        pak.ReadContents(_pakFiles[pakIndex], _knownPaths);
+        var entry = pak.Entries.FirstOrDefault(candidate => candidate.CombinedHash == hash);
+        if (entry == null) return null;
+
+        var stream = new MemoryStream((int)entry.decompressedSize);
+        pak.Read(entry, stream);
+        stream.Position = 0;
+        return stream;
     }
 
     /// <summary>Extract one file to an output directory, preserving its native path.</summary>

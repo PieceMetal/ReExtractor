@@ -36,7 +36,8 @@ public sealed class AnimationService
         var outputPath = Path.Combine(outputDirectory,
             $"001_{SafeName(stem)}_motion{motionIndex:D3}_id{motion.motNumber}.glb");
         var boneNames = skeletonMesh.Bones.Select(bone => bone.Name).ToArray();
-        var clip = BuildClip(mot, motion.motNumber, boneNames);
+        var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
+            (int)mot.Header.version == 892);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
         new ViewportExportService().ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
         progress?.Invoke(1, 1);
@@ -66,7 +67,8 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             if (motion.MotFile is not MotFile mot) continue;
             var outputPath = Path.Combine(outputDirectory,
                 $"{outputs.Count + 1:D3}_{SafeName(stem)}_motion{index:D3}_id{motion.motNumber}.glb");
-            var clip = BuildClip(mot, motion.motNumber, boneNames);
+            var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
+                (int)mot.Header.version == 892);
             exporter.ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
             outputs.Add(outputPath);
             progress?.Invoke(outputs.Count, exportableCount);
@@ -181,7 +183,12 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         return value.Length > 80 ? value[..80] : value;
     }
 
-    private static AnimationClip BuildClip(MotFile mot, int motionNumber, IReadOnlyList<string> meshBoneNames)
+    private static AnimationClip BuildClip(
+        MotFile mot,
+        int motionNumber,
+        IReadOnlyList<string> meshBoneNames,
+        ViewportMesh skeletonMesh,
+        bool usesReferencePoseTracks)
     {
         var hashToBone = new Dictionary<uint, (int Index, string Name)>(meshBoneNames.Count);
         for (var i = 0; i < meshBoneNames.Count; i++)
@@ -236,6 +243,14 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
 
             tracks[target.Index] = track;
             namedTracks[target.Name] = track;
+        }
+
+        if (usesReferencePoseTracks)
+        {
+            ViewportDataLoader.RetargetMot892Tracks(mot, namedTracks, skeletonMesh);
+            foreach (var (name, track) in namedTracks)
+                if (hashToBone.TryGetValue(MurMur3HashUtils.GetHash(name), out var target))
+                    tracks[target.Index] = track;
         }
 
         return new AnimationClip

@@ -33,6 +33,7 @@
       <MenuItem Header="设置" Click="OnSettingsClicked"/>
       <MenuItem Header="环境" Click="OnEnvironmentClicked"/>
       <MenuItem Header="关于" Click="OnAboutClicked"/>
+      <MenuItem Header="检查更新…" Click="OnCheckUpdatesClicked"/>
     </Menu>
     <!-- Fixed status bar: current state only; detailed output stays in the log panel. -->
     <Border x:Name="StatusStrip" DockPanel.Dock="Bottom" Margin="-12,8,-12,-12" Background="#20252d"

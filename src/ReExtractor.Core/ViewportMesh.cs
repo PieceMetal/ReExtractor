@@ -436,7 +436,8 @@ public static class ViewportDataLoader
         // flattening them into the preview makes the real albedo look missing or corrupted.
         // Keep the source mesh/export untouched and exclude only from the interactive preview.
         var helperGroups = allGroups.Where(g => g.Submeshes.Count > 0 &&
-            g.Submeshes.All(s => s.materialIndex < mesh.MaterialNames.Count &&
+            g.Submeshes.Where(IsSubmeshRangeValid).Any() &&
+            g.Submeshes.Where(IsSubmeshRangeValid).All(s => s.materialIndex < mesh.MaterialNames.Count &&
                 IsPreviewHelperMaterial(mesh.MaterialNames[s.materialIndex])))
             .ToList();
         var visualGroups = allGroups.Except(helperGroups).ToList();
@@ -447,7 +448,7 @@ public static class ViewportDataLoader
         foreach (var g in visualGroups)
         {
             var materials = g.Submeshes
-                .Where(s => s.indicesCount >= 3 && s.materialIndex >= 0)
+                .Where(s => IsSubmeshRangeValid(s) && s.indicesCount >= 3 && s.materialIndex >= 0)
                 .Select(s => s.materialIndex)
                 .Distinct()
                 .ToArray();
@@ -474,7 +475,8 @@ public static class ViewportDataLoader
         var viewportGroups = allGroups.Select(g =>
         {
             var materials = g.Submeshes
-                .Where(s => s.indicesCount >= 3 && s.materialIndex < mesh.MaterialNames.Count)
+                .Where(s => IsSubmeshRangeValid(s) && s.indicesCount >= 3 &&
+                            s.materialIndex < mesh.MaterialNames.Count)
                 .Select(s => mesh.MaterialNames[s.materialIndex])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -484,7 +486,7 @@ public static class ViewportDataLoader
                 Id = g.groupId,
                 Name = $"组 {g.groupId}",
                 Materials = materials,
-                FaceCount = g.Submeshes.Sum(s => s.indicesCount / 3),
+                FaceCount = g.Submeshes.Where(IsSubmeshRangeValid).Sum(s => s.indicesCount / 3),
                 DefaultVisible = keptGroupIds.Contains(g.groupId),
                 IsHelper = helperGroupIds.Contains(g.groupId),
             };
@@ -497,6 +499,11 @@ public static class ViewportDataLoader
         {
             foreach (var sub in group.Submeshes)
             {
+                // Some Wilds costume parts reference optional streaming buffers that are
+                // absent from an extracted package. ReeLib exposes the declared range, but
+                // slicing it would throw. Preserve the rest of the mesh and skip only the
+                // unavailable submesh.
+                if (!IsSubmeshRangeValid(sub)) continue;
                 var positions = sub.Positions;
                 if (positions.Length == 0) continue;
                 var vBase = verts.Count;
@@ -527,9 +534,13 @@ public static class ViewportDataLoader
                     // RE renders these with dedicated transparent/refraction shaders. FBX
                     // cannot reproduce them faithfully; without a color material they otherwise
                     // become an opaque white shell that hides the real eyeball in UE.
-                    exportHidden = IsUnsupportedEyeOverlayMaterial(matName) &&
-                        !materialTextures.ContainsKey(sub.materialIndex);
-                    if (materialTextures.TryGetValue(sub.materialIndex, out var previewMaterial))
+                    // The RE eye lens is a refractive shell that requires the game's
+                    // specialised shader. Rendering it as an ordinary opaque albedo
+                    // layer sits in front of the eyeball and makes the iris look shifted.
+                    // Keep the actual eye mesh; hide only these unsupported overlays.
+                    exportHidden = IsUnsupportedEyeOverlayMaterial(matName) ||
+                        IsPreviewHelperMaterial(matName);
+                    if (!exportHidden && materialTextures.TryGetValue(sub.materialIndex, out var previewMaterial))
                     {
                         alphaCutout = previewMaterial.AlphaCutout;
                         if (!textureIndex.TryGetValue(matName, out texSlot))
@@ -583,6 +594,10 @@ public static class ViewportDataLoader
         MeshFile mesh, string meshPath, Func<string, Stream?> openResource)
     {
         var result = new Dictionary<int, PreviewMaterial>();
+        // Several material variants (cloth/metal/pants, for example) often share
+        // one large source albedo. Decode that immutable source once, then give
+        // each material its own writable pixel copy for tint/mask processing.
+        var decodedBaseTextures = new Dictionary<string, ViewportTexture>(StringComparer.OrdinalIgnoreCase);
 
         // MDF naming varies by game. OWOTS uses the mesh basename directly with
         // .mdf2.50, while SF6 commonly adds _v00 and uses .mdf2.31.
@@ -646,8 +661,11 @@ public static class ViewportDataLoader
                     atlasQuadrant = !albedoPath.Equals(wrinkle.texPath, StringComparison.OrdinalIgnoreCase);
                 }
             }
-            var baseColor = mat.Parameters.FirstOrDefault(parameter =>
-                parameter.paramName.Equals("BaseColor", StringComparison.OrdinalIgnoreCase))?.parameter ?? Vector4.One;
+            // Wilds materials use ColorParam for the tint used by eye lines and
+            // eyelashes, while several older games use BaseColor. Rise eyelashes
+            // use their own Eyelash_Color parameter; its Face material's Hair_Color
+            // must not be applied to the whole baked face atlas.
+            var baseColor = GetPreviewBaseColor(mat);
             var fallbackTexture = false;
             if (string.IsNullOrEmpty(albedoPath))
             {
@@ -660,12 +678,15 @@ public static class ViewportDataLoader
                 fallbackTexture = true;
             }
 
-            using var texStream = fallbackTexture ? null : OpenNormalized(openResource, albedoPath!, meshPath);
-            if (!fallbackTexture && texStream == null) continue;
             try
             {
+                var isMhs3Pupil = mat.Name.EndsWith("_pupil", StringComparison.OrdinalIgnoreCase);
                 var isEyeMaterial = mat.Name.Equals("m_eye", StringComparison.OrdinalIgnoreCase) ||
-                    mat.Name.Contains("eyeball", StringComparison.OrdinalIgnoreCase);
+                    mat.Name.Equals("EyeL", StringComparison.OrdinalIgnoreCase) ||
+                    mat.Name.Equals("EyeR", StringComparison.OrdinalIgnoreCase) ||
+                    mat.Name.Contains("eyeball", StringComparison.OrdinalIgnoreCase) ||
+                    isMhs3Pupil ||
+                    mat.Name.EndsWith("_white", StringComparison.OrdinalIgnoreCase);
                 var flags = mat.Header.Flags;
                 var alphaCutout = (flags & (MaterialFlags.BaseAlphaTestEnable |
                     MaterialFlags.ForcedAlphaTestEnable | MaterialFlags.AlphaTestEnable)) != 0;
@@ -673,15 +694,47 @@ public static class ViewportDataLoader
                 // Keep that as a compatibility fallback, but prefer the MDF's authoritative flags.
                 alphaCutout |= mat.Name.Contains("ALP", StringComparison.OrdinalIgnoreCase) ||
                     IsAlphaCutoutMaterial(mat);
+                // Wilds eye-line/eyeshadow cards store their coverage in BaseAlphaMap;
+                // it is not an opaque base-color texture.
+                alphaCutout |= mat.Textures.Any(texture =>
+                    texture.texType.Equals("BaseAlphaMap", StringComparison.OrdinalIgnoreCase) &&
+                    !IsNullTexture(texture.texPath));
 
-                var texture = fallbackTexture
-                    ? CreateSolidTexture(baseColor, mat.Name)
-                    : DecodeTexture(texStream!, albedoPath!, atlasQuadrant);
-                ApplyBaseColor(texture, baseColor);
+                var isHairCard = IsHairCardMaterial(mat);
+                ViewportTexture texture;
+                if (fallbackTexture)
+                {
+                    texture = CreateSolidTexture(baseColor, mat.Name);
+                }
+                else
+                {
+                    var cacheKey = $"{albedoPath}|crop={atlasQuadrant}";
+                    if (!decodedBaseTextures.TryGetValue(cacheKey, out var sourceTexture))
+                    {
+                        using var texStream = OpenNormalized(openResource, albedoPath!, meshPath);
+                        if (texStream == null) continue;
+                        sourceTexture = DecodeTexture(texStream, albedoPath!, atlasQuadrant);
+                        decodedBaseTextures[cacheKey] = sourceTexture;
+                    }
+                    texture = CloneTexture(sourceTexture, mat.Name);
+                }
+                // Wilds hair cards use BaseAlphaMap as a coverage field. Its RGB
+                // is a neutral grey mask, not the strand colour; using it directly
+                // produces the white eyebrows/lashes seen in the basic preview.
+                if (isHairCard && mat.Textures.Any(candidate =>
+                        candidate.texType.Equals("BaseAlphaMap", StringComparison.OrdinalIgnoreCase) &&
+                        !IsNullTexture(candidate.texPath)))
+                    ApplyHairCardTint(texture, baseColor);
+                else
+                    ApplyBaseColor(texture, baseColor);
                 ApplyCustomizeColorMasks(texture, mat, openResource, meshPath);
                 var eyeColor = mat.Parameters.FirstOrDefault(parameter =>
-                    parameter.paramName.Equals("Eye_ColorChange", StringComparison.OrdinalIgnoreCase))?.parameter;
+                        parameter.paramName.Equals("Eye_ColorChange", StringComparison.OrdinalIgnoreCase))?.parameter
+                    ?? mat.Parameters.FirstOrDefault(parameter =>
+                        parameter.paramName.Equals("Eye_Color", StringComparison.OrdinalIgnoreCase))?.parameter;
                 if (eyeColor.HasValue) ApplyEyeColorChange(texture, eyeColor.Value);
+                if (isMhs3Pupil)
+                    ApplyMhs3EyeColorLayers(texture, mat, openResource, meshPath);
                 if (isEyeMaterial)
                 {
                     // DMC5 eye ALBM stores color in RGB while its alpha channel is zero
@@ -716,6 +769,9 @@ public static class ViewportDataLoader
                         alphaCutout = true;
                     }
                 }
+                // Decode and material customization may each alter the pixels. Build the
+                // GPU mip chain once from the final result, not after every sub-step.
+                BuildMipChain(texture);
                 result[meshMatIndex] = new PreviewMaterial(texture, alphaCutout);
             }
             catch { /* skip undecodable textures */ }
@@ -733,6 +789,52 @@ public static class ViewportDataLoader
             ?? mat.Textures.FirstOrDefault(t => t.texType.Equals("BaseDielectricMap", StringComparison.OrdinalIgnoreCase))
             ?? mat.Textures.FirstOrDefault(t => IsBaseColorSlot(t.texType, t.texPath));
         return albedo?.texPath;
+    }
+
+    private static Vector4 GetPreviewBaseColor(MaterialData mat)
+    {
+        var authored = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("BaseColor", StringComparison.OrdinalIgnoreCase))?.parameter
+            ?? mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("ColorParam", StringComparison.OrdinalIgnoreCase))?.parameter;
+        if (authored.HasValue) return authored.Value;
+
+        // MHS3's BCLO hair map is a brightness/occlusion texture rather than the
+        // final strand colour.  Its active colour swatch is stored separately in
+        // SymbolColor_Default (or SymbolColor_R for a selected colour variant).
+        // FixedHairColor is only active when its matching flag is enabled.
+        if (IsHairCardMaterial(mat))
+        {
+            var useFixedHairColor = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("UseFixedHairColor", StringComparison.OrdinalIgnoreCase))?.parameter.X > 0.5f;
+            if (useFixedHairColor)
+            {
+                var fixedHairColor = mat.Parameters.FirstOrDefault(parameter =>
+                    parameter.paramName.Equals("FixedHairColor", StringComparison.OrdinalIgnoreCase))?.parameter;
+                if (fixedHairColor.HasValue) return fixedHairColor.Value;
+            }
+
+            var useRedVariant = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("UseColorChange_R", StringComparison.OrdinalIgnoreCase))?.parameter.X > 0.5f;
+            var symbolColor = mat.Parameters.FirstOrDefault(parameter =>
+                    parameter.paramName.Equals(useRedVariant ? "SymbolColor_R" : "SymbolColor_Default", StringComparison.OrdinalIgnoreCase))?.parameter;
+            if (symbolColor.HasValue) return symbolColor.Value;
+        }
+
+        // MHRise keeps lash coverage in AlphaMap and its strand colour in this
+        // separate field. Face.Hair_Color is deliberately excluded: it affects
+        // only a shader layer over FaceBaseMap, not the complete skin texture.
+        if (mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase))
+            return mat.Parameters.FirstOrDefault(parameter =>
+                    parameter.paramName.Equals("Eyelash_Color", StringComparison.OrdinalIgnoreCase))?.parameter
+                ?? Vector4.One;
+
+        if (mat.Name.Contains("tooth", StringComparison.OrdinalIgnoreCase))
+            return mat.Parameters.FirstOrDefault(parameter =>
+                    parameter.paramName.Equals("Adjuatment_color", StringComparison.OrdinalIgnoreCase))?.parameter
+                ?? Vector4.One;
+
+        return Vector4.One;
     }
 
     private static string? FindFamilyBaseTexturePath(IEnumerable<MaterialData> materials, MaterialData mat)
@@ -826,13 +928,13 @@ public static class ViewportDataLoader
                 }
             }
         });
-        BuildMipChain(texture);
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
     private static bool IsNullTexture(string path)
         => path.Contains("NullWhite", StringComparison.OrdinalIgnoreCase)
            || path.Contains("NullBlack", StringComparison.OrdinalIgnoreCase)
+           || path.Contains("NullGray", StringComparison.OrdinalIgnoreCase)
            || path.Contains("NullTexture", StringComparison.OrdinalIgnoreCase);
 
     private static void ApplyBaseColor(ViewportTexture texture, Vector4 color)
@@ -848,14 +950,26 @@ public static class ViewportDataLoader
             var b = (uint)Math.Clamp((int)MathF.Round((pixel & 0xFF) * blue), 0, 255);
             texture.Pixels[i] = (pixel & 0xFF000000) | (r << 16) | (g << 8) | b;
         }
-        BuildMipChain(texture);
+    }
+
+    /// <summary>Apply the authored hair colour while retaining an ALBA map's coverage.</summary>
+    private static void ApplyHairCardTint(ViewportTexture texture, Vector4 color)
+    {
+        var red = (uint)Math.Clamp((int)MathF.Round(Math.Clamp(color.X, 0f, 1f) * 255f), 0, 255);
+        var green = (uint)Math.Clamp((int)MathF.Round(Math.Clamp(color.Y, 0f, 1f) * 255f), 0, 255);
+        var blue = (uint)Math.Clamp((int)MathF.Round(Math.Clamp(color.Z, 0f, 1f) * 255f), 0, 255);
+        var opacity = Math.Clamp(color.W, 0f, 1f);
+        for (var i = 0; i < texture.Pixels.Length; i++)
+        {
+            var coverage = (uint)Math.Clamp((int)MathF.Round(((texture.Pixels[i] >> 24) & 0xFF) * opacity), 0, 255);
+            texture.Pixels[i] = (coverage << 24) | (red << 16) | (green << 8) | blue;
+        }
     }
 
     private static void ForceOpaqueAlpha(ViewportTexture texture)
     {
         for (var i = 0; i < texture.Pixels.Length; i++)
             texture.Pixels[i] = texture.Pixels[i] | 0xFF000000u;
-        BuildMipChain(texture);
     }
 
     private static void ApplyEyeColorChange(ViewportTexture texture, Vector4 eyeColor)
@@ -877,8 +991,77 @@ public static class ViewportDataLoader
             var b = (uint)Math.Clamp((int)MathF.Round((pixel & 0xFF) * bScale), 0, 255);
             texture.Pixels[i] = (pixel & 0xFF000000) | (r << 16) | (g << 8) | b;
         }
-        BuildMipChain(texture);
     }
+
+    /// <summary>
+    /// MHS3 stores its iris as a grayscale ALBD plus a ColorLayerReflectionMap whose
+    /// R/G channels select SymbolColor_R/G.  The game shader combines them at render
+    /// time; reproducing that compact composition keeps the iris detail while applying
+    /// the character's selected colour.
+    /// </summary>
+    private static void ApplyMhs3EyeColorLayers(ViewportTexture texture, MaterialData mat,
+        Func<string, Stream?> openResource, string meshPath)
+    {
+        var colorLayer = mat.Textures.FirstOrDefault(candidate =>
+            candidate.texType.Equals("ColorLayerReflectionMap", StringComparison.OrdinalIgnoreCase) &&
+            !IsNullTexture(candidate.texPath));
+        if (colorLayer == null) return;
+
+        var useRed = mat.Parameters.FirstOrDefault(parameter =>
+            parameter.paramName.Equals("UseColorChange_R", StringComparison.OrdinalIgnoreCase))?.parameter.X > 0.5f;
+        var useGreen = mat.Parameters.FirstOrDefault(parameter =>
+            parameter.paramName.Equals("UseColorChange_G", StringComparison.OrdinalIgnoreCase))?.parameter.X > 0.5f;
+        if (!useRed && !useGreen) return;
+
+        var redColor = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("SymbolColor_R", StringComparison.OrdinalIgnoreCase))?.parameter
+            ?? Vector4.One;
+        var greenColor = mat.Parameters.FirstOrDefault(parameter =>
+                parameter.paramName.Equals("SymbolColor_G", StringComparison.OrdinalIgnoreCase))?.parameter
+            ?? Vector4.One;
+
+        using var colorLayerStream = OpenNormalized(openResource, colorLayer.texPath, meshPath);
+        if (colorLayerStream == null) return;
+        using var colorMask = new TexService().DecodeToImage(colorLayerStream, colorLayer.texPath);
+        if (colorMask.Width != texture.Width || colorMask.Height != texture.Height)
+            colorMask.Mutate(operation => operation.Resize(texture.Width, texture.Height));
+
+        colorMask.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < texture.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < texture.Width; x++)
+                {
+                    var mask = row[x];
+                    var redWeight = useRed ? mask.R / 255f : 0f;
+                    var greenWeight = useGreen ? mask.G / 255f : 0f;
+                    var weight = Math.Clamp(redWeight + greenWeight, 0f, 1f);
+                    if (weight <= 0.001f) continue;
+
+                    var tint = redWeight + greenWeight <= 0.001f
+                        ? Vector4.One
+                        : (redColor * redWeight + greenColor * greenWeight) /
+                          Math.Max(0.001f, redWeight + greenWeight);
+                    var index = y * texture.Width + x;
+                    var pixel = texture.Pixels[index];
+                    var brightness = Math.Max((pixel >> 16) & 0xFF,
+                        Math.Max((pixel >> 8) & 0xFF, pixel & 0xFF)) / 255f;
+                    var targetR = brightness * Math.Clamp(tint.X, 0f, 1f);
+                    var targetG = brightness * Math.Clamp(tint.Y, 0f, 1f);
+                    var targetB = brightness * Math.Clamp(tint.Z, 0f, 1f);
+                    var sourceR = ((pixel >> 16) & 0xFF) / 255f;
+                    var sourceG = ((pixel >> 8) & 0xFF) / 255f;
+                    var sourceB = (pixel & 0xFF) / 255f;
+                    var r = (uint)Math.Clamp((int)MathF.Round(Lerp(sourceR, targetR, weight) * 255f), 0, 255);
+                    var g = (uint)Math.Clamp((int)MathF.Round(Lerp(sourceG, targetG, weight) * 255f), 0, 255);
+                    var b = (uint)Math.Clamp((int)MathF.Round(Lerp(sourceB, targetB, weight) * 255f), 0, 255);
+                    texture.Pixels[index] = (pixel & 0xFF000000) | (r << 16) | (g << 8) | b;
+                }
+            }
+        });
+    }
+
     private static void ApplyAlphaMap(ViewportTexture texture, Stream alphaStream, string alphaPath, float adjust)
     {
         using var alpha = new TexService().DecodeToImage(alphaStream, alphaPath);
@@ -899,16 +1082,19 @@ public static class ViewportDataLoader
                 }
             }
         });
-        BuildMipChain(texture);
     }
+    private static bool IsHairCardMaterial(MaterialData mat)
+    {
+        return mat.Name.Contains("hair", StringComparison.OrdinalIgnoreCase) ||
+               mat.Name.Contains("eyebrow", StringComparison.OrdinalIgnoreCase) ||
+               mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase) ||
+               mat.Name.Contains("eyeduct", StringComparison.OrdinalIgnoreCase) ||
+               mat.Name.Contains("beard", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsAlphaCutoutMaterial(MaterialData mat)
     {
-        if (mat.Name.Contains("hair", StringComparison.OrdinalIgnoreCase) ||
-            mat.Name.Contains("eyebrow", StringComparison.OrdinalIgnoreCase) ||
-            mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase) ||
-            mat.Name.Contains("eyeduct", StringComparison.OrdinalIgnoreCase) ||
-            mat.Name.Contains("eyeshadow", StringComparison.OrdinalIgnoreCase) ||
-            mat.Name.Contains("beard", StringComparison.OrdinalIgnoreCase))
+        if (IsHairCardMaterial(mat) || mat.Name.Contains("eyeshadow", StringComparison.OrdinalIgnoreCase))
             return true;
 
         return mat.Textures.Any(texture =>
@@ -927,6 +1113,13 @@ public static class ViewportDataLoader
                       path.Contains("/VFX/", StringComparison.OrdinalIgnoreCase);
         if (derived) return false;
         return type.Equals("BaseColorMap", StringComparison.OrdinalIgnoreCase) ||
+               // Monster Hunter Stories 3's toon/PBR character materials use
+               // ALBR (albedo + reflection) as their authored base surface.
+               type.Equals("BaseColorReflectionMap", StringComparison.OrdinalIgnoreCase) ||
+               // MHS3 hair uses BCLO rather than an ALBD slot.  It contains the
+               // authored strand colour plus baked occlusion, so skipping it leaves
+               // the entire hair mesh untextured and grey/white in the preview.
+               type.Equals("BrightnessColorLayerOcclusionMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("AlbedoMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAlbedoMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseColor", StringComparison.OrdinalIgnoreCase) ||
@@ -934,17 +1127,31 @@ public static class ViewportDataLoader
                type.Equals("BaseShiftMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAnisoShiftMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("BaseAlphaMap", StringComparison.OrdinalIgnoreCase) ||
+               // MHRise's player shaders predate the generic Base* slot names.
+               // FaceBaseMap is the complete baked skin albedo; BaseMap is used
+               // for teeth; AlphaMap is the grayscale lash coverage/color map.
+               type.Equals("FaceBaseMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("BaseMap", StringComparison.OrdinalIgnoreCase) ||
+               type.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) ||
                type.Equals("ALBD", StringComparison.OrdinalIgnoreCase);
     }
 
     private static readonly string[] MdfNameSuffixCandidates = ["", "_v00"];
 
     private static readonly string[] MdfVersionCandidates =
-        [".mdf2.51", ".mdf2.50", ".mdf2.45", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
+        [".mdf2.51", ".mdf2.50", ".mdf2.49", ".mdf2.45", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
          ".mdf2.23", ".mdf2.21", ".mdf2.19", ".mdf2.13", ".mdf2.10", ".mdf2.6"];
 
     private static bool HasBufferRange(int bufferLength, int offset, int count)
         => offset >= 0 && count >= 0 && offset <= bufferLength && count <= bufferLength - offset;
+
+    private static bool IsSubmeshRangeValid(Submesh sub)
+    {
+        var integerFaces = sub.Buffer.IntegerFaces;
+        var faceLength = integerFaces != null ? integerFaces.Length : sub.Buffer.Faces?.Length ?? 0;
+        return HasBufferRange(sub.Buffer.Positions.Length, sub.vertsIndexOffset, sub.vertCount) &&
+               HasBufferRange(faceLength, sub.facesIndexOffset, sub.indicesCount);
+    }
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
     private static readonly string[] TexVersionCandidates =
         [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];
@@ -1060,7 +1267,6 @@ public static class ViewportDataLoader
             Pixels = [0xFF000000u | (r << 16) | (g << 8) | b],
             Name = name,
         };
-        BuildMipChain(texture);
         return texture;
     }
 
@@ -1098,8 +1304,20 @@ public static class ViewportDataLoader
             }
         });
         var tex = new ViewportTexture { Width = w, Height = h, Pixels = pixels, Name = Path.GetFileName(texPath) };
-        BuildMipChain(tex);
         return tex;
+    }
+
+    private static ViewportTexture CloneTexture(ViewportTexture source, string name)
+    {
+        var pixels = new uint[source.Pixels.Length];
+        Array.Copy(source.Pixels, pixels, pixels.Length);
+        return new ViewportTexture
+        {
+            Width = source.Width,
+            Height = source.Height,
+            Pixels = pixels,
+            Name = name,
+        };
     }
 
     /// <summary>Generate a full mip chain (box-filter 2x2 per level) so the rasterizer can pick a mip that matches the pixel footprint, eliminating minification aliasing.</summary>
@@ -1143,21 +1361,39 @@ public static class ViewportDataLoader
 
     private static bool IsPreviewHelperMaterial(string name)
         => name.Contains("EffectEmitter", StringComparison.OrdinalIgnoreCase)
-           || name.Contains("VFXEmitter", StringComparison.OrdinalIgnoreCase);
+           || name.Contains("VFXEmitter", StringComparison.OrdinalIgnoreCase)
+           // Wilds character assets retain a pair of DCC/runtime volume passes. They use
+           // Simple_VolumeBlend with no authored colour texture, so the generic preview
+           // paints them as solid grey over the actual garment. They are not renderable
+           // character surfaces and must stay out of the preview (and preview export).
+           || name.Equals("fakeShade", StringComparison.OrdinalIgnoreCase)
+           || name.EndsWith("_mesh_lambert1", StringComparison.OrdinalIgnoreCase)
+           // Stories 3 uses an untextured *_outline shell for the in-game toon outline.
+           // It is not an albedo surface; drawing it as an opaque material covers the
+           // face with a blue-grey mask and leaves fragments of the real skin visible.
+           || name.EndsWith("_outline", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsUnsupportedEyeOverlayMaterial(string name)
         => name.Contains("cornea", StringComparison.OrdinalIgnoreCase)
+           || name.Contains("eyelens", StringComparison.OrdinalIgnoreCase)
            || name.Contains("eyeouter", StringComparison.OrdinalIgnoreCase)
            || name.Contains("eyewet", StringComparison.OrdinalIgnoreCase)
            || name.Contains("eye_shadow", StringComparison.OrdinalIgnoreCase)
-           || name.Contains("human_tear", StringComparison.OrdinalIgnoreCase);
+           || name.Contains("human_tear", StringComparison.OrdinalIgnoreCase)
+           // MHS3 names its refractive eye shells chXX_..._L_lens/R_lens.
+           // They have only AlphaMap, so a generic preview turns them into opaque
+           // grey discs over the properly textured pupil and sclera.
+           || name.EndsWith("_L_lens", StringComparison.OrdinalIgnoreCase)
+           || name.EndsWith("_R_lens", StringComparison.OrdinalIgnoreCase);
 
     private static float GetGroupsBoundsDiagonal(IEnumerable<MeshGroup> groups)
     {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
         var found = false;
-        foreach (var position in groups.SelectMany(g => g.Submeshes).SelectMany(s => s.Positions.ToArray()))
+        foreach (var position in groups.SelectMany(g => g.Submeshes)
+                     .Where(IsSubmeshRangeValid)
+                     .SelectMany(s => s.Positions.ToArray()))
         {
             min = Vector3.Min(min, position);
             max = Vector3.Max(max, position);
@@ -1169,7 +1405,7 @@ public static class ViewportDataLoader
     private static bool IsNearDuplicateGroup(MeshGroup candidate, IReadOnlyList<MeshGroup> kept, float modelDiagonal)
     {
         var candidateParts = candidate.Submeshes
-            .Where(s => s.Positions.Length > 0)
+            .Where(s => IsSubmeshRangeValid(s) && s.Positions.Length > 0)
             .GroupBy(s => s.materialIndex)
             .ToArray();
         if (candidateParts.Length == 0) return false;
@@ -1180,7 +1416,7 @@ public static class ViewportDataLoader
             var duplicate = kept.Any(previous =>
             {
                 var previousVertices = previous.Submeshes
-                    .Where(s => s.materialIndex == part.Key)
+                    .Where(s => IsSubmeshRangeValid(s) && s.materialIndex == part.Key)
                     .SelectMany(s => s.Positions.ToArray())
                     .ToArray();
                 return GeometryBoundsMatch(candidateVertices, previousVertices, modelDiagonal);
@@ -1284,11 +1520,11 @@ public static class ViewportDataLoader
         using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
         if (!motlist.Read())
             throw new InvalidDataException($"Failed to parse .motlist: {motlistPath}");
-
         var motion = motlist.Motions.ElementAtOrDefault(motionIndex)
             ?? throw new InvalidDataException($"Motion index {motionIndex} out of range");
         if (motion.MotFile is not MotFile mot)
             throw new NotSupportedException("Motion has no embedded .mot data");
+        var usesReferencePoseTracks = (int)mot.Header.version == 892;
 
         // Noesis adds bones that exist in the MOT header but are absent from
         // an individual mesh part before it builds the keyframe animation.
@@ -1298,7 +1534,9 @@ public static class ViewportDataLoader
         if (sceneMeshes is { Count: > 0 })
         {
             foreach (var sceneMesh in sceneMeshes)
+            {
                 AddAnimationBones(sceneMesh, mot.Bones);
+            }
 
             meshBoneNames = sceneMeshes
                 .SelectMany(mesh => mesh.Bones)
@@ -1374,6 +1612,16 @@ public static class ViewportDataLoader
             if (boneName != null) namedTracks[boneName] = track;
         }
 
+        if (usesReferencePoseTracks)
+        {
+            RetargetMot892Tracks(mot, namedTracks,
+                sceneMeshes?.OrderByDescending(mesh => mesh.Bones.Length).FirstOrDefault());
+            if (hashToBone != null)
+                foreach (var (name, track) in namedTracks)
+                    if (hashToBone.TryGetValue(MurMur3HashUtils.GetHash(name), out var target))
+                        tracks[target.Index] = track;
+        }
+
         return new AnimationClip
         {
             Name = $"mot_{motion.motNumber}", Duration = duration,
@@ -1382,10 +1630,564 @@ public static class ViewportDataLoader
         };
     }
 
+    /// <summary>
+    /// Onimusha 2 MOT 892 stores limb translations as model-space IK targets,
+    /// while rotation channels remain local bone rotations. The MOT bone table
+    /// supplies each target's reference position. Retarget those target deltas
+    /// onto the mesh bind pose and solve the two-bone chains; treating the target
+    /// coordinates as local transforms makes hands and feet fly off the model.
+    /// </summary>
+    internal static void RetargetMot892Tracks(
+        MotFile mot,
+        IDictionary<string, BoneTrack> targetTracks,
+        ViewportMesh? targetSkeleton)
+    {
+        if (targetSkeleton == null || targetTracks.Count == 0) return;
+        var referenceBones = mot.Bones
+            .Where(bone => !string.IsNullOrWhiteSpace(bone.boneName))
+            .GroupBy(bone => bone.boneName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(),
+                StringComparer.OrdinalIgnoreCase);
+        var boneIndexes = targetSkeleton.Bones
+            .Select((bone, index) => (bone.Name, index))
+            .GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().index,
+                StringComparer.OrdinalIgnoreCase);
+        var rawTracks = targetTracks.ToDictionary(item => item.Key, item => item.Value,
+            StringComparer.OrdinalIgnoreCase);
+        var xzAxisTargets = mot.BoneClips
+            .Where(clip => clip.Translation?.TranslationCompressionType is
+                           Vector3Decompression.LoadVector3sXZAxis8Bit or
+                           Vector3Decompression.LoadVector3sXZAxis12Bit or
+                           Vector3Decompression.LoadVector3sXZAxis16Bit &&
+                           !string.IsNullOrWhiteSpace(clip.ClipHeader.boneName))
+            .Select(clip => clip.ClipHeader.boneName!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ikChains = new[]
+        {
+            (Root: "R_upperarm", Mid: "R_lowerarmX", End: "R_hand", Ball: (string?)null, MirrorPole: false),
+            (Root: "L_upperarm", Mid: "L_lowerarmX", End: "L_hand", Ball: (string?)null, MirrorPole: true),
+            (Root: "R_thigh", Mid: "R_calf", End: "R_foot", Ball: (string?)"R_ball", MirrorPole: false),
+            (Root: "L_thigh", Mid: "L_calf", End: "L_foot", Ball: (string?)"L_ball", MirrorPole: true),
+        }.Where(chain => boneIndexes.ContainsKey(chain.Root) &&
+                         boneIndexes.ContainsKey(chain.Mid) &&
+                         boneIndexes.ContainsKey(chain.End) &&
+                         rawTracks.TryGetValue(chain.End, out var endTrack) &&
+                         endTrack.Translations is { Length: > 0 })
+         .ToArray();
+        foreach (var chain in ikChains)
+        {
+            if (!targetTracks.ContainsKey(chain.Root)) targetTracks[chain.Root] = new BoneTrack();
+            if (!targetTracks.ContainsKey(chain.Mid)) targetTracks[chain.Mid] = new BoneTrack();
+            if (chain.Ball != null && boneIndexes.ContainsKey(chain.Ball) &&
+                !targetTracks.ContainsKey(chain.Ball))
+                targetTracks[chain.Ball] = new BoneTrack();
+            if (chain.Root.EndsWith("upperarm", StringComparison.OrdinalIgnoreCase))
+            {
+                var lowerYName = chain.Root.StartsWith("L_", StringComparison.OrdinalIgnoreCase)
+                    ? "L_lowerarmY"
+                    : "R_lowerarmY";
+                if (boneIndexes.ContainsKey(lowerYName) && !targetTracks.ContainsKey(lowerYName))
+                    targetTracks[lowerYName] = new BoneTrack();
+            }
+        }
+        var fps = mot.Header.FrameRate > 0 ? mot.Header.FrameRate : 60;
+        var lastFrame = (int)MathF.Ceiling(MathF.Max(mot.Header.frameCount, mot.Header.endFrame));
+        var times = Enumerable.Range(0, Math.Max(1, lastFrame + 1))
+            .Select(frame => frame / (float)fps)
+            .ToArray();
+        var baked = targetTracks.Keys
+            .Where(name => boneIndexes.ContainsKey(name) && referenceBones.ContainsKey(name))
+            .ToDictionary(name => name, _ => (Translations: new Vector3[times.Length],
+                Rotations: new Quaternion[times.Length]), StringComparer.OrdinalIgnoreCase);
+
+        var bindGlobals = new Matrix4x4[targetSkeleton.Bones.Length];
+        var bindComputed = new bool[bindGlobals.Length];
+        for (var index = 0; index < bindGlobals.Length; index++) ComputeBindGlobal(index);
+
+        for (var frame = 0; frame < times.Length; frame++)
+        {
+            var globals = new Matrix4x4[targetSkeleton.Bones.Length];
+            var locals = new Matrix4x4[targetSkeleton.Bones.Length];
+            var computed = new bool[globals.Length];
+            for (var index = 0; index < globals.Length; index++) ComputeAnimatedGlobal(index);
+            foreach (var chain in ikChains) SolveIkChain(chain);
+
+            foreach (var (name, data) in baked)
+            {
+                var index = boneIndexes[name];
+                var local = globals[index];
+                var parent = targetSkeleton.Bones[index].ParentIndex;
+                if (parent >= 0 && parent < globals.Length &&
+                    Matrix4x4.Invert(globals[parent], out var inverseParent))
+                    local *= inverseParent;
+                if (!Matrix4x4.Decompose(local, out _, out var rotation, out var translation))
+                {
+                    rotation = Quaternion.Identity;
+                    translation = local.Translation;
+                }
+                data.Translations[frame] = translation;
+                data.Rotations[frame] = NormalizeOrIdentity(rotation);
+            }
+
+            void ComputeAnimatedGlobal(int index)
+            {
+                if (computed[index]) return;
+                var bone = targetSkeleton.Bones[index];
+                var parent = bone.ParentIndex;
+                var parentGlobal = Matrix4x4.Identity;
+                if (parent >= 0 && parent < globals.Length)
+                {
+                    ComputeAnimatedGlobal(parent);
+                    parentGlobal = globals[parent];
+                }
+
+                Matrix4x4.Decompose(bone.LocalBind, out var scale, out var rotation, out var translation);
+                if (rawTracks.TryGetValue(bone.Name, out var raw) &&
+                    referenceBones.TryGetValue(bone.Name, out var reference))
+                {
+                    // Root/mid rotations carry axial twist and can be applied
+                    // before the positional solve. End rotations are expressed
+                    // in model space (or disabled for hands), never as local bone
+                    // rotations.
+                    var ikEnd = ikChains.Any(chain =>
+                        bone.Name.Equals(chain.End, StringComparison.OrdinalIgnoreCase));
+                    if (!ikEnd && raw.Rotations is { Length: > 0 } rotations &&
+                        raw.RotTimes is { Length: > 0 } rotationTimes)
+                    {
+                        rotation = NormalizeOrIdentity(
+                            SampleTrack(rotations, rotationTimes, times[frame]));
+
+                        // JointData type 7 is not an ordinary child rotation.
+                        // Onimusha 2 folds the spine controller into the breast
+                        // joint before applying the breast's own X rotation.
+                        // Applying only the breast channel loses the torso lean
+                        // that the original runtime visibly preserves.
+                        if (bone.Name.Equals("breast", StringComparison.OrdinalIgnoreCase) &&
+                            rawTracks.TryGetValue("spine", out var spineTrack) &&
+                            spineTrack.Rotations is { Length: > 0 } spineRotations &&
+                            spineTrack.RotTimes is { Length: > 0 } spineRotationTimes)
+                            rotation = NormalizeOrIdentity(
+                                SampleTrack(spineRotations, spineRotationTimes, times[frame]) * rotation);
+                    }
+                }
+                locals[index] = Matrix4x4.CreateScale(scale) *
+                                Matrix4x4.CreateFromQuaternion(rotation) *
+                                Matrix4x4.CreateTranslation(translation);
+                globals[index] = locals[index] * parentGlobal;
+
+                // MOT 892 emits model-space IK targets on limb bones (hands,
+                // feet, thighs and upper arms). Applying those targets as bone
+                // translations stretches the skinned chain. Only the pelvis
+                // channel is a deform-pose translation. Limb targets are consumed
+                // by SolveIkChain below and must not also become local positions.
+                if (bone.Name.Equals("pelvis", StringComparison.OrdinalIgnoreCase) &&
+                    rawTracks.TryGetValue(bone.Name, out var positionTrack) &&
+                    referenceBones.TryGetValue(bone.Name, out var positionReference) &&
+                    positionTrack.Translations is { Length: > 0 } translations &&
+                    positionTrack.TransTimes is { Length: > 0 } translationTimes)
+                {
+                    globals[index].Translation =
+                        SampleTrack(translations, translationTimes, times[frame]);
+                }
+                computed[index] = true;
+            }
+
+            void SolveIkChain((string Root, string Mid, string End, string? Ball, bool MirrorPole) chain)
+            {
+                var rootIndex = boneIndexes[chain.Root];
+                var midIndex = boneIndexes[chain.Mid];
+                var endIndex = boneIndexes[chain.End];
+                if (!rawTracks.TryGetValue(chain.End, out var targetTrack) ||
+                    targetTrack.Translations is not { Length: > 0 } targetValues ||
+                    targetTrack.TransTimes is not { Length: > 0 } targetTimes ||
+                    !referenceBones.TryGetValue(chain.End, out var targetReference))
+                    return;
+
+                var rootPosition = globals[rootIndex].Translation;
+                var currentMid = globals[midIndex].Translation;
+                var currentEnd = globals[endIndex].Translation;
+                var upperLength = Vector3.Distance(rootPosition, currentMid);
+                var lowerLength = Vector3.Distance(currentMid, currentEnd);
+                if (upperLength < 1e-5f || lowerLength < 1e-5f) return;
+
+                // The translation on a JointData 3/4 thigh is the signed side
+                // axis of the IK basis. Transform it by the pelvis controller;
+                // type 4 uses the mirrored sign. This axis remains stable through
+                // large pelvis turns, unlike a screen/model-space pole guess.
+                var planeNormal = Vector3.UnitZ;
+                if (rawTracks.TryGetValue(chain.Root, out var poleTrack) &&
+                    poleTrack.Translations is { Length: > 0 } poleValues &&
+                    poleTrack.TransTimes is { Length: > 0 } poleTimes)
+                {
+                    planeNormal = SampleTrack(poleValues, poleTimes, times[frame]);
+                    var legacyLeftArmAxis = chain.MirrorPole &&
+                                            chain.Root.EndsWith("upperarm", StringComparison.OrdinalIgnoreCase) &&
+                                            xzAxisTargets.Contains(chain.Root);
+                    if (legacyLeftArmAxis)
+                    {
+                        // Type 6 stores only the X/Z controller pair. Reconstruct
+                        // the runtime shoulder side axis from that normalized pair;
+                        // these coefficients come from the game's type-6 basis
+                        // conversion, not from a screen-space mirror.
+                        var encoded = Vector3.Normalize(planeNormal);
+                        planeNormal = new Vector3(
+                            0.18400343f * encoded.X - 0.04845674f * encoded.Z + 0.88369350f,
+                           -0.29193612f * encoded.X - 0.00575891f * encoded.Z + 0.17522209f,
+                           -0.17461551f * encoded.X + 0.05430577f * encoded.Z + 0.41430242f);
+                    }
+                    else if (chain.MirrorPole)
+                        planeNormal = -planeNormal;
+                    if (planeNormal.LengthSquared() > 1e-8f)
+                    {
+                        if (!legacyLeftArmAxis)
+                        {
+                            var poleParent = targetSkeleton.Bones[rootIndex].ParentIndex;
+                            if (poleParent >= 0 && poleParent < globals.Length &&
+                                Matrix4x4.Decompose(globals[poleParent], out _, out var parentRotation, out _))
+                                planeNormal = Vector3.Transform(planeNormal, parentRotation);
+                        }
+                        planeNormal = Vector3.Normalize(planeNormal);
+                    }
+                }
+
+                // MOT 892 limb positions are already targets in the motion's
+                // model space. Hand tracks target the hand joint. Foot tracks
+                // target the ball joint, so convert that point back to the ankle
+                // using the requested global foot orientation and the mesh bind
+                // offset from foot to ball.
+                var requested = SampleTrack(targetValues, targetTimes, times[frame]);
+                Quaternion? requestedEndRotation = null;
+                Quaternion? requestedBallRotation = null;
+                int? requestedBallIndex = null;
+                if (rawTracks.TryGetValue(chain.End, out var endTrack) &&
+                    endTrack.Rotations is { Length: > 0 } endRotations &&
+                    endTrack.RotTimes is { Length: > 0 } endRotationTimes)
+                    requestedEndRotation = NormalizeOrIdentity(
+                        SampleTrack(endRotations, endRotationTimes, times[frame]));
+
+                if (chain.Ball != null)
+                {
+                    if (requestedEndRotation is Quaternion solvedBallRotation &&
+                        boneIndexes.TryGetValue(chain.Ball, out var ballIndex))
+                    {
+                        requestedBallIndex = ballIndex;
+                        requestedBallRotation = solvedBallRotation;
+                        var ballLocalMatrix = targetSkeleton.Bones[ballIndex].LocalBind;
+                        var ballLocal = ballLocalMatrix.Translation;
+                        var bindBallRotation = NormalizeOrIdentity(
+                            Quaternion.CreateFromRotationMatrix(ballLocalMatrix));
+
+                        // The controller quaternion is the requested ball-joint
+                        // orientation. JointData type 1 applies the inverse of the
+                        // serialized ball bind locally, so recover the parent foot
+                        // orientation before converting the ball position to ankle.
+                        var solvedFootRotation = NormalizeOrIdentity(
+                            bindBallRotation * solvedBallRotation);
+                        requestedEndRotation = solvedFootRotation;
+                        var ballOffset = Vector3.Transform(ballLocal, solvedFootRotation);
+
+                        requested -= ballOffset;
+                    }
+                }
+                var toTarget = requested - rootPosition;
+                var distance = toTarget.Length();
+                if (distance < 1e-5f) return;
+                var targetDirection = toTarget / distance;
+                var solvedDistance = Math.Clamp(distance,
+                    MathF.Abs(upperLength - lowerLength) + 1e-4f,
+                    upperLength + lowerLength - 1e-4f);
+                var cosine = Math.Clamp((upperLength * upperLength + solvedDistance * solvedDistance -
+                                         lowerLength * lowerLength) /
+                                        (2f * upperLength * solvedDistance), -1f, 1f);
+                var sine = MathF.Sqrt(MathF.Max(0f, 1f - cosine * cosine));
+                // pJnt_info 3/4/5/6 stores the opposite of the chain's geometric
+                // normal (the left controller uses the mirrored convention).
+                // normal x target therefore points towards the real knee/elbow.
+                    var bendDirection = Vector3.Cross(planeNormal, targetDirection);
+                bendDirection -= targetDirection * Vector3.Dot(bendDirection, targetDirection);
+                if (bendDirection.LengthSquared() < 1e-8f)
+                    bendDirection = Vector3.UnitY - targetDirection * Vector3.Dot(Vector3.UnitY, targetDirection);
+                bendDirection = Vector3.Normalize(bendDirection);
+                var desiredMid = rootPosition +
+                    (targetDirection * cosine + bendDirection * sine) * upperLength;
+                var desiredEnd = rootPosition + targetDirection * solvedDistance;
+
+                var solvedUpperDirection = Vector3.Normalize(desiredMid - rootPosition);
+                if (chain.Root.EndsWith("upperarm", StringComparison.OrdinalIgnoreCase))
+                {
+                    // JointData types 5/6 derive the shoulder basis from the solved
+                    // chain itself. The split lowerarmX channel is a pure axial
+                    // rotation: its inverse is retained on the upper arm, while the
+                    // channel itself remains on lowerarmX. This is the exact layout
+                    // exposed by the game's JNT_WORK matrices.
+                    var isLeft = chain.Root.StartsWith("L_", StringComparison.OrdinalIgnoreCase);
+                    var xAxis = isLeft ? solvedUpperDirection : -solvedUpperDirection;
+                    var yAxis = isLeft ? planeNormal : -planeNormal;
+                    var solvedRotation = RotationFromAxes(
+                        xAxis, yAxis, Vector3.Cross(xAxis, yAxis));
+                    var type6LeftArm = isLeft && xzAxisTargets.Contains(chain.Root);
+                    if (!type6LeftArm &&
+                        rawTracks.TryGetValue(chain.Root, out var upperArmController) &&
+                        upperArmController.Rotations is { Length: > 0 } upperArmRotations &&
+                        upperArmController.RotTimes is { Length: > 0 } upperArmRotationTimes)
+                    {
+                        var upperArmRotation = NormalizeOrIdentity(SampleTrack(
+                            upperArmRotations, upperArmRotationTimes, times[frame]));
+                        var axialTwist = NormalizeOrIdentity(new Quaternion(
+                            upperArmRotation.X, 0f, 0f, upperArmRotation.W));
+                        var twistedBasis = Matrix4x4.CreateFromQuaternion(axialTwist) *
+                                           Matrix4x4.CreateFromQuaternion(solvedRotation);
+                        solvedRotation = NormalizeOrIdentity(Quaternion.CreateFromRotationMatrix(twistedBasis));
+                    }
+                    SetGlobalRotation(rootIndex, solvedRotation);
+                }
+                else
+                {
+                    // JointData types 3/4 use -Y for the thigh direction and the
+                    // controller normal for the side axis.
+                    var yAxis = -solvedUpperDirection;
+                    var xAxis = -planeNormal;
+                    xAxis -= yAxis * Vector3.Dot(xAxis, yAxis);
+                    SetGlobalRotation(rootIndex, RotationFromAxes(xAxis, yAxis, Vector3.Cross(xAxis, yAxis)));
+                }
+                currentMid = globals[midIndex].Translation;
+                currentEnd = globals[endIndex].Translation;
+                var solvedLowerDirection = Vector3.Normalize(desiredEnd - currentMid);
+                if (chain.Root.EndsWith("thigh", StringComparison.OrdinalIgnoreCase))
+                {
+                    var yAxis = -solvedLowerDirection;
+                    var xAxis = -planeNormal;
+                    xAxis -= yAxis * Vector3.Dot(xAxis, yAxis);
+                    SetGlobalRotation(midIndex, RotationFromAxes(xAxis, yAxis, Vector3.Cross(xAxis, yAxis)));
+                }
+                else
+                {
+                    // The authored upper-arm controller supplies the base axial
+                    // twist on lowerarmX. JointData then adds the remaining
+                    // twist needed to bring the solved forearm direction into
+                    // lowerarmY's X/Z bend plane. Dropping that local Y component
+                    // works only for near-planar clips and leaves the left hand
+                    // visibly short of its target in motions such as mot_3.
+                    var lowerXBaseRotation = Quaternion.Identity;
+                    if (rawTracks.TryGetValue(chain.Root, out var armController) &&
+                        armController.Rotations is { Length: > 0 } controllerRotations &&
+                        armController.RotTimes is { Length: > 0 } controllerRotationTimes)
+                    {
+                        lowerXBaseRotation = Quaternion.Inverse(NormalizeOrIdentity(
+                            SampleTrack(controllerRotations, controllerRotationTimes, times[frame])));
+                        SetLocalRotation(midIndex, lowerXBaseRotation);
+                    }
+                    var lowerYName = chain.Root.StartsWith("L_", StringComparison.OrdinalIgnoreCase)
+                        ? "L_lowerarmY"
+                        : "R_lowerarmY";
+                    var aimIndex = boneIndexes.TryGetValue(lowerYName, out var lowerYIndex)
+                        ? lowerYIndex
+                        : midIndex;
+                    if (aimIndex != midIndex &&
+                        Matrix4x4.Decompose(globals[midIndex], out _, out var lowerXGlobalRotation, out _))
+                    {
+                        var localDirection = Vector3.Transform(solvedLowerDirection,
+                            Quaternion.Inverse(NormalizeOrIdentity(lowerXGlobalRotation)));
+                        if (localDirection.Y * localDirection.Y + localDirection.Z * localDirection.Z > 1e-10f)
+                        {
+                            // For System.Numerics' row-vector convention,
+                            // inverse(Rx(a)) maps y to y*cos(a)+z*sin(a).
+                            // Choose a so that the direction expressed below
+                            // lowerarmX has y=0 and can be represented exactly
+                            // by lowerarmY's single Y-axis rotation.
+                            var axialCorrection = MathF.Atan2(-localDirection.Y, localDirection.Z);
+                            lowerXBaseRotation = NormalizeOrIdentity(
+                                Quaternion.CreateFromAxisAngle(Vector3.UnitX, axialCorrection) *
+                                lowerXBaseRotation);
+                            SetLocalRotation(midIndex, lowerXBaseRotation);
+                            if (Matrix4x4.Decompose(globals[midIndex], out _, out lowerXGlobalRotation, out _))
+                                localDirection = Vector3.Transform(solvedLowerDirection,
+                                    Quaternion.Inverse(NormalizeOrIdentity(lowerXGlobalRotation)));
+                        }
+                        localDirection.Y = 0;
+                        if (localDirection.LengthSquared() > 1e-10f)
+                        {
+                            localDirection = Vector3.Normalize(localDirection);
+                            var bindDirection = chain.Root.StartsWith("L_", StringComparison.OrdinalIgnoreCase)
+                                ? Vector3.UnitX
+                                : -Vector3.UnitX;
+                            var angle = MathF.Atan2(
+                                Vector3.Dot(Vector3.UnitY, Vector3.Cross(bindDirection, localDirection)),
+                                Math.Clamp(Vector3.Dot(bindDirection, localDirection), -1f, 1f));
+                            SetLocalRotation(aimIndex,
+                                Quaternion.CreateFromAxisAngle(Vector3.UnitY, angle));
+                        }
+                    }
+                    else
+                    {
+                        currentMid = globals[aimIndex].Translation;
+                        currentEnd = globals[endIndex].Translation;
+                        RotateGlobalDirection(aimIndex, currentEnd - currentMid, desiredEnd - currentMid);
+                    }
+                }
+
+                if (requestedEndRotation is Quaternion endRotation)
+                    SetGlobalRotation(endIndex, endRotation);
+                if (requestedBallIndex is int solvedBallIndex &&
+                    requestedBallRotation is Quaternion ballRotation)
+                    SetGlobalRotation(solvedBallIndex, ballRotation);
+            }
+
+            void SetGlobalRotation(int index, Quaternion rotation)
+            {
+                Matrix4x4.Decompose(globals[index], out var scale, out _, out var translation);
+                var adjustedGlobal = Matrix4x4.CreateScale(scale) *
+                                     Matrix4x4.CreateFromQuaternion(NormalizeOrIdentity(rotation)) *
+                                     Matrix4x4.CreateTranslation(translation);
+                var parent = targetSkeleton.Bones[index].ParentIndex;
+                locals[index] = adjustedGlobal;
+                if (parent >= 0 && parent < globals.Length &&
+                    Matrix4x4.Invert(globals[parent], out var inverseParent))
+                    locals[index] *= inverseParent;
+                RecomputeSubtree(index);
+            }
+
+            void SetLocalRotation(int index, Quaternion rotation)
+            {
+                Matrix4x4.Decompose(locals[index], out var scale, out _, out var translation);
+                locals[index] = Matrix4x4.CreateScale(scale) *
+                                Matrix4x4.CreateFromQuaternion(NormalizeOrIdentity(rotation)) *
+                                Matrix4x4.CreateTranslation(translation);
+                RecomputeSubtree(index);
+            }
+
+            void RotateGlobalDirection(int index, Vector3 from, Vector3 to)
+            {
+                if (from.LengthSquared() < 1e-10f || to.LengthSquared() < 1e-10f) return;
+                var delta = RotationBetween(Vector3.Normalize(from), Vector3.Normalize(to));
+                Matrix4x4.Decompose(globals[index], out var scale, out var rotation, out var translation);
+                var adjustedGlobal = Matrix4x4.CreateScale(scale) *
+                                     Matrix4x4.CreateFromQuaternion(NormalizeOrIdentity(delta * rotation)) *
+                                     Matrix4x4.CreateTranslation(translation);
+                var parent = targetSkeleton.Bones[index].ParentIndex;
+                locals[index] = adjustedGlobal;
+                if (parent >= 0 && parent < globals.Length &&
+                    Matrix4x4.Invert(globals[parent], out var inverseParent))
+                    locals[index] *= inverseParent;
+                RecomputeSubtree(index);
+            }
+
+            static Quaternion RotationFromAxes(Vector3 xAxis, Vector3 yAxis, Vector3 zAxis)
+            {
+                if (xAxis.LengthSquared() < 1e-10f || yAxis.LengthSquared() < 1e-10f ||
+                    zAxis.LengthSquared() < 1e-10f)
+                    return Quaternion.Identity;
+                xAxis = Vector3.Normalize(xAxis);
+                zAxis = Vector3.Normalize(zAxis - xAxis * Vector3.Dot(zAxis, xAxis));
+                yAxis = Vector3.Normalize(Vector3.Cross(zAxis, xAxis));
+                var matrix = new Matrix4x4(
+                    xAxis.X, xAxis.Y, xAxis.Z, 0,
+                    yAxis.X, yAxis.Y, yAxis.Z, 0,
+                    zAxis.X, zAxis.Y, zAxis.Z, 0,
+                    0, 0, 0, 1);
+                return NormalizeOrIdentity(Quaternion.CreateFromRotationMatrix(matrix));
+            }
+
+            void RecomputeSubtree(int index)
+            {
+                var parent = targetSkeleton.Bones[index].ParentIndex;
+                globals[index] = parent >= 0 && parent < globals.Length
+                    ? locals[index] * globals[parent]
+                    : locals[index];
+                for (var child = 0; child < targetSkeleton.Bones.Length; child++)
+                    if (targetSkeleton.Bones[child].ParentIndex == index)
+                        RecomputeSubtree(child);
+            }
+        }
+
+        foreach (var (name, track) in targetTracks)
+        {
+            if (!baked.TryGetValue(name, out var data)) continue;
+            track.TransTimes = times;
+            track.Translations = data.Translations;
+            track.RotTimes = times;
+            track.Rotations = EnsureQuaternionContinuity(data.Rotations);
+        }
+
+        void ComputeBindGlobal(int index)
+        {
+            if (bindComputed[index]) return;
+            var bone = targetSkeleton.Bones[index];
+            var parent = bone.ParentIndex;
+            if (parent >= 0 && parent < bindGlobals.Length)
+            {
+                ComputeBindGlobal(parent);
+                bindGlobals[index] = bone.LocalBind * bindGlobals[parent];
+            }
+            else bindGlobals[index] = bone.LocalBind;
+            bindComputed[index] = true;
+        }
+    }
+
+    private static Vector3 SampleTrack(Vector3[] values, float[] times, float time)
+    {
+        if (values.Length == 1 || time <= times[0]) return values[0];
+        if (time >= times[^1]) return values[^1];
+        var next = Array.BinarySearch(times, time);
+        if (next >= 0) return values[Math.Min(next, values.Length - 1)];
+        next = ~next;
+        var previous = next - 1;
+        var amount = (time - times[previous]) / Math.Max(1e-6f, times[next] - times[previous]);
+        return Vector3.Lerp(values[Math.Min(previous, values.Length - 1)],
+            values[Math.Min(next, values.Length - 1)], amount);
+    }
+
+    private static Quaternion SampleTrack(Quaternion[] values, float[] times, float time)
+    {
+        if (values.Length == 1 || time <= times[0]) return values[0];
+        if (time >= times[^1]) return values[^1];
+        var next = Array.BinarySearch(times, time);
+        if (next >= 0) return values[Math.Min(next, values.Length - 1)];
+        next = ~next;
+        var previous = next - 1;
+        var amount = (time - times[previous]) / Math.Max(1e-6f, times[next] - times[previous]);
+        return Quaternion.Slerp(values[Math.Min(previous, values.Length - 1)],
+            values[Math.Min(next, values.Length - 1)], amount);
+    }
+
+    private static Quaternion[] EnsureQuaternionContinuity(Quaternion[] values)
+    {
+        var result = new Quaternion[values.Length];
+        Quaternion? previous = null;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var current = NormalizeOrIdentity(values[i]);
+            if (previous is Quaternion prior && Quaternion.Dot(prior, current) < 0)
+                current = new Quaternion(-current.X, -current.Y, -current.Z, -current.W);
+            result[i] = current;
+            previous = current;
+        }
+        return result;
+    }
+
+    private static Quaternion NormalizeOrIdentity(Quaternion value)
+        => value.LengthSquared() > 1e-12f ? Quaternion.Normalize(value) : Quaternion.Identity;
+
+    private static Quaternion RotationBetween(Vector3 from, Vector3 to)
+    {
+        var dot = Math.Clamp(Vector3.Dot(from, to), -1f, 1f);
+        if (dot > 0.999999f) return Quaternion.Identity;
+        if (dot < -0.999999f)
+        {
+            var axis = Vector3.Cross(from, Vector3.UnitX);
+            if (axis.LengthSquared() < 1e-8f) axis = Vector3.Cross(from, Vector3.UnitY);
+            return Quaternion.CreateFromAxisAngle(Vector3.Normalize(axis), MathF.PI);
+        }
+        var cross = Vector3.Cross(from, to);
+        return NormalizeOrIdentity(new Quaternion(cross, 1f + dot));
+    }
+
     private static void AddAnimationBones(ViewportMesh mesh, IReadOnlyList<MotBone> motionBones)
     {
         if (motionBones.Count == 0) return;
 
+        var originalBoneCount = mesh.Bones.Length;
         var byName = mesh.Bones
             .Select((bone, index) => (bone, index))
             .ToDictionary(item => item.bone.Name, item => item.index,
@@ -1433,7 +2235,12 @@ public static class ViewportDataLoader
         for (var index = 0; index < mesh.Bones.Length; index++)
             Compute(index);
 
-        for (var index = 0; index < mesh.Bones.Length; index++)
+        // The mesh inverse-bind matrices are authoritative. Rebuilding them from
+        // LocalBind changes the bind space for formats whose serialized local and
+        // inverse-global transforms are not exact mathematical inverses (notably
+        // Onimusha 2), which makes skinned vertices explode as soon as animation is
+        // applied. Only appended MOT-only helper bones need a synthesized inverse.
+        for (var index = originalBoneCount; index < mesh.Bones.Length; index++)
             if (Matrix4x4.Invert(globals[index], out var inverse))
                 mesh.Bones[index].InverseGlobalBind = inverse;
 

@@ -158,6 +158,7 @@ public partial class MainWindow : Window
     private readonly string _tempDir = AppPaths.TempDirectory;
     private readonly string _logDirectory = AppPaths.LogsDirectory;
     private readonly ModelAssemblyPresetService _assemblyPresetService = new();
+    private readonly UpdateService _updateService = new();
     private int _progressOperation;
     private AppSettings _settings = AppSettingsService.Load();
     private readonly List<string> _loadedPakPaths = new();
@@ -218,7 +219,11 @@ public partial class MainWindow : Window
         _actionStatusLogSubscription = ActionStatus.GetObservable(TextBlock.TextProperty)
             .Subscribe(new TextObserver(AppendLog));
         AppendLog("工具已启动，请选择路径列表并加载 PAK");
-        Opened += async (_, _) => await ShowEnvironmentWindowAsync();
+        Opened += async (_, _) =>
+        {
+            await ShowEnvironmentWindowAsync();
+            await CheckForUpdatesAsync(false);
+        };
 
     }
 
@@ -262,6 +267,11 @@ public partial class MainWindow : Window
     private int BeginProgress(string text, bool indeterminate = true, double maximum = 100)
     {
         var operation = ++_progressOperation;
+        // Each long-running action owns the workspace while it is active. This prevents
+        // selection changes, preset loads, and viewport actions from racing a model or
+        // texture decoder and applying results to the wrong scene.
+        MainLayout.IsEnabled = false;
+        MainMenu.IsEnabled = false;
         ProgressPanel.IsVisible = true;
         ProgressText.Text = text;
         WorkProgress.Maximum = Math.Max(1, maximum);
@@ -290,6 +300,8 @@ public partial class MainWindow : Window
         if (operation != _progressOperation) return;
         ProgressPanel.IsVisible = false;
         ProgressText.Text = "";
+        MainLayout.IsEnabled = true;
+        MainMenu.IsEnabled = true;
     }
 
     private string? SelectedListPath => (ManagedListCombo.SelectedItem as ManagedFileList)?.FilePath;
@@ -374,6 +386,12 @@ public partial class MainWindow : Window
         {
             var preset = _assemblyPresetService.Load(files[0].Path.LocalPath);
             var missing = preset.MeshPaths.Where(path => !_byPath.ContainsKey(path)).ToArray();
+
+            // A preset replaces the next scene that will be assembled. Do not leave an
+            // earlier texture task owning the button (or the current preview) after it
+            // finishes in the background.
+            InvalidateTextureLoad();
+            ++_previewSeq;
             _mergeQueue.Clear();
             _mergeQueue.AddRange(preset.MeshPaths.Where(path => _byPath.ContainsKey(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase));
@@ -541,6 +559,19 @@ public partial class MainWindow : Window
                 .Replace("_Demo", "", StringComparison.OrdinalIgnoreCase);
             normalized = NormalizeGameName(trimmed);
             if (normalized.Length >= 3) yield return normalized;
+
+            // The canonical Ekey list for Monster Hunter Wilds is named
+            // MHWs_STM_Release, while Steam publishes the installed title as
+            // "Monster Hunter Wilds". "mhws" is not a substring or acronym
+            // of that Steam title, so add the game-name key explicitly.
+            if (normalized.StartsWith("mhws", StringComparison.OrdinalIgnoreCase))
+                yield return "monsterhunterwilds";
+
+            // The online MHS3_STM_Release list uses Capcom's short project
+            // name; Steam uses the complete product title. Keep both the full
+            // release list and the trial list on the same game-directory match.
+            if (normalized.StartsWith("mhs3", StringComparison.OrdinalIgnoreCase))
+                yield return "monsterhunterstories3twistedreflection";
         }
     }
 
@@ -849,6 +880,37 @@ public partial class MainWindow : Window
 
     private async void OnAboutClicked(object? sender, RoutedEventArgs e)
         => await new AboutWindow().ShowDialog(this);
+
+    private async void OnCheckUpdatesClicked(object? sender, RoutedEventArgs e)
+        => await CheckForUpdatesAsync(true);
+
+    private async Task CheckForUpdatesAsync(bool showCurrentStatus)
+    {
+        try
+        {
+            if (showCurrentStatus) ActionStatus.Text = "正在检查更新…";
+            var release = await _updateService.CheckAsync();
+            if (release == null)
+            {
+                if (showCurrentStatus)
+                    ActionStatus.Text = $"当前已是最新版本 {_updateService.CurrentVersion.ToString(3)}";
+                return;
+            }
+
+            var window = new UpdateWindow(_updateService, release);
+            var install = await window.ShowDialog<bool>(this);
+            if (!install || window.PreparedUpdate == null) return;
+            _updateService.LaunchInstaller(window.PreparedUpdate);
+            if (Application.Current?.ApplicationLifetime is
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+                desktop.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            if (showCurrentStatus) ActionStatus.Text = "检查更新失败：" + ex.Message;
+            else AppendLog("自动检查更新失败：" + ex.Message);
+        }
+    }
 
     private async void OnEnvironmentClicked(object? sender, RoutedEventArgs e)
         => await ShowEnvironmentWindowAsync();
@@ -1430,10 +1492,21 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     }
 
     private int _previewSeq;
+    private int _textureLoadSeq;
+
+    private void InvalidateTextureLoad()
+    {
+        // Texture decoding runs asynchronously and cannot be interrupted inside the
+        // decoder. A sequence token makes its result stale immediately if a scene change
+        // is triggered programmatically; normal UI scene changes are blocked while busy.
+        ++_textureLoadSeq;
+        LoadTexturesButton.IsEnabled = true;
+    }
 
     private async Task PreviewPathAsync(string path)
     {
         if (_pak == null) return;
+        InvalidateTextureLoad();
         var seq = ++_previewSeq;
         var progress = BeginProgress("正在生成预览…");
         bool IsStale() => seq != _previewSeq;
@@ -1775,6 +1848,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
         var paths = _previewMeshPaths.ToArray();
         var operation = ++_previewSeq;
+        var textureOperation = ++_textureLoadSeq;
         var progress = BeginProgress("正在加载贴图…");
         LoadTexturesButton.IsEnabled = false;
         try
@@ -1783,14 +1857,17 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             for (var index = 0; index < paths.Length; index++)
             {
                 var path = paths[index];
+                UpdateProgress(progress, index,
+                    $"正在解码贴图 {index + 1}/{paths.Length}：{Path.GetFileName(path)}");
                 meshes[index] = await Task.Run(() =>
                 {
                     using var ms = _pak.ReadFile(path);
                     return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: true);
                 });
+                if (operation != _previewSeq || textureOperation != _textureLoadSeq) return;
                 UpdateProgress(progress, index + 1, $"正在加载贴图 {index + 1}/{paths.Length}");
             }
-            if (operation != _previewSeq) return;
+            if (operation != _previewSeq || textureOperation != _textureLoadSeq) return;
 
             ShowViewport();
             SetPreviewMeshPaths(paths);
@@ -1817,7 +1894,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         }
         finally
         {
-            LoadTexturesButton.IsEnabled = true;
+            // Do not let an invalidated older task alter the state of a newer one.
+            if (textureOperation == _textureLoadSeq)
+                LoadTexturesButton.IsEnabled = true;
             EndProgress(progress);
         }
     }
@@ -2044,12 +2123,15 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if ((uint)comboIndex >= (uint)_currentMotionIndices.Length) return;
         var idx = _currentMotionIndices[comboIndex];
         var motlistPath = _currentMotlistPath;
+        var sceneMeshes = Viewport.SceneMeshes;
+        var meshBoneNames = Viewport.AllMeshBoneNames;
         try
         {
             var clip = await Task.Run(() =>
             {
                 using var motMs = _pak.ReadFile(motlistPath);
-                return ViewportDataLoader.LoadAnimation(motMs, motlistPath, idx, Viewport.AllMeshBoneNames);
+                return ViewportDataLoader.LoadAnimation(motMs, motlistPath, idx,
+                    meshBoneNames, sceneMeshes);
             });
             Viewport.SetAnimation(clip);
             ShowTimeline(clip.Duration);
@@ -2064,6 +2146,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private async Task<(AnimationClip Clip, IReadOnlyList<MotionInfo> Motions)> LoadMotionListAsync(string path, int index)
     {
         if (_pak == null) throw new InvalidOperationException("尚未加载游戏资源");
+        var sceneMeshes = Viewport.SceneMeshes;
+        var meshBoneNames = Viewport.AllMeshBoneNames;
         return await Task.Run(() =>
         {
             using var namesStream = _pak.ReadFile(path);
@@ -2071,7 +2155,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (motions.Count == 0) throw new InvalidDataException("动画列表中没有可读取的内嵌动作");
             using var motionStream = _pak.ReadFile(path);
             var clip = ViewportDataLoader.LoadAnimation(motionStream, path,
-                motions[Math.Clamp(index, 0, motions.Count - 1)].SourceIndex, Viewport.AllMeshBoneNames);
+                motions[Math.Clamp(index, 0, motions.Count - 1)].SourceIndex,
+                meshBoneNames, sceneMeshes);
             return (clip, motions);
         });
     }
@@ -2685,6 +2770,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         // A left-click selection may still be decoding its automatic single-model preview.
         // Invalidate it before changing the assembled scene so it cannot finish later and
         // silently replace the primary mesh/export source list.
+        InvalidateTextureLoad();
         var sceneOperation = ++_previewSeq;
         var progress = BeginProgress("正在叠加模型…");
         ActionStatus.Text = "叠加模型加载中…";
@@ -2999,6 +3085,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         // Joining the queue starts from selected rows, and row selection also starts an
         // asynchronous single-model preview. Give this merge operation ownership of the
         // scene so an older preview cannot overwrite the merged result after it completes.
+        InvalidateTextureLoad();
         var sceneOperation = ++_previewSeq;
         var progress = BeginProgress($"正在加载模型 0/{_mergeQueue.Count}", indeterminate: false,
             maximum: _mergeQueue.Count);
@@ -3006,42 +3093,59 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         try
         {
             var paths = _mergeQueue.ToArray();
-            var meshes = new ViewportMesh[paths.Length];
+            var meshes = new List<ViewportMesh>(paths.Length);
+            var loadedPaths = new List<string>(paths.Length);
+            var skipped = new List<string>();
             for (var i = 0; i < paths.Length; i++)
             {
                 var index = i;
-                meshes[index] = await Task.Run(() =>
+                var mesh = await Task.Run(() =>
                 {
                     using var ms = _pak.ReadFile(paths[index]);
                     return ViewportDataLoader.LoadMesh(ms, paths[index], 1, OpenResource, loadTextures: false);
                 });
+                if (mesh.VertexCount == 0 || mesh.FaceCount == 0)
+                {
+                    skipped.Add(paths[index]);
+                    AppendLog($"合并加载已跳过无可视几何的模型：{paths[index]}");
+                }
+                else
+                {
+                    meshes.Add(mesh);
+                    loadedPaths.Add(paths[index]);
+                }
                 UpdateProgress(progress, index + 1,
                     $"正在加载模型 {index + 1}/{paths.Length}");
             }
             if (sceneOperation != _previewSeq) return;
+            if (meshes.Count == 0)
+                throw new InvalidDataException("队列中的模型均不包含可显示的几何数据");
 
             // smart check: if every queued model shares the same bone-name set, geometrically
             // merge into ONE mesh and play a single animation (Noesis-style, same character parts);
             // otherwise load the first as primary and the rest as independent animated extras.
-            var shouldMerge = meshes.Length > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
+            var shouldMerge = meshes.Count > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
             ShowViewport();
-            SetPreviewMeshPaths(paths);
+            SetPreviewMeshPaths(loadedPaths.ToArray());
             ClearMotionState();
             if (shouldMerge)
             {
                 var merged = ViewportMesh.Merge(meshes);
                 Viewport.SetMesh(merged);
                 RefreshVisconGroups();
-                ActionStatus.Text = $"已几何合并 {meshes.Length} 个模型（未加载贴图，同骨骼）→ 预览 1 个整体，导出包含全部 {paths.Length} 个源模型";
+                ActionStatus.Text = $"已几何合并 {meshes.Count} 个模型（未加载贴图，同骨骼）→ 预览 1 个整体" +
+                    (skipped.Count > 0 ? $"；跳过 {skipped.Count} 个无几何占位模型" : "");
             }
             else
             {
                 Viewport.SetMesh(meshes[0]);
                 RefreshVisconGroups();
-                for (var i = 1; i < meshes.Length; i++)
-                    Viewport.AddMesh(meshes[i], paths[i].Split('/')[^1]);
-                var verb = meshes.Length > 1 ? $"已加载 {meshes.Length} 个模型（未加载贴图，骨骼不同 → 按主模型同步动画）" : "模型已加载（未加载贴图）";
-                ActionStatus.Text = $"{verb} | 导出包含全部 {paths.Length} 个源模型 | {Viewport.StatusInfo}";
+                for (var i = 1; i < meshes.Count; i++)
+                    Viewport.AddMesh(meshes[i], loadedPaths[i].Split('/')[^1]);
+                var verb = meshes.Count > 1 ? $"已加载 {meshes.Count} 个模型（未加载贴图，骨骼不同 → 按主模型同步动画）" : "模型已加载（未加载贴图）";
+                ActionStatus.Text = $"{verb} | 导出包含 {loadedPaths.Count} 个有效源模型" +
+                    (skipped.Count > 0 ? $" | 跳过 {skipped.Count} 个无几何占位模型" : "") +
+                    $" | {Viewport.StatusInfo}";
             }
         }
         catch (Exception ex)

@@ -3,7 +3,7 @@
         x:Class="ReExtractor.Gui.AboutWindow"
         Icon="/Assets/AppIcon.ico"
         Title="关于 ReExtractor"
-        Width="560" Height="470" CanResize="False"
+        Width="590" Height="540" CanResize="False"
         WindowStartupLocation="CenterOwner"
         Background="#16191f">
   <Grid RowDefinitions="*,Auto" Margin="24">
@@ -19,19 +19,26 @@
 
         <Separator/>
         <TextBlock Text="RE 引擎资源工作台" FontSize="16" FontWeight="SemiBold"/>
-        <TextBlock Text="专注于从 RE Engine PAK 中提取模型、动画和贴图，提供资源预览、模型合并与 UE 可用的 FBX 导出。本工具不提供 Mod 编辑功能。"
+        <TextBlock Text="面向 RE Engine 游戏的资源解包、预览与导出工作台。支持从 PAK 或已解包目录读取模型、动画、贴图和场景，并导出 UE/DCC 可用的 FBX 与 PNG。本工具不提供 Mod 编辑功能。"
                    TextWrapping="Wrap" Foreground="#d4d4d4"/>
 
         <Border Background="#20252d" BorderBrush="#303947" BorderThickness="1" CornerRadius="6" Padding="12">
           <StackPanel Spacing="5">
             <TextBlock Text="当前支持" FontWeight="SemiBold" Foreground="#9cdcfe"/>
-            <TextBlock Text="• 已验证：《鬼武者：剑之道》DEMO 解包、预览与导出" TextWrapping="Wrap"/>
-            <TextBlock Text="• 通用：RE Engine PAK 扫描、路径还原和资源提取" TextWrapping="Wrap"/>
-            <TextBlock Text="• 实验性：《街头霸王 6》等其他 RE Engine 游戏的模型、材质与动画预览" TextWrapping="Wrap"/>
+            <TextBlock Text="• PAK 扫描、路径还原、单项提取与全部解包" TextWrapping="Wrap"/>
+            <TextBlock Text="• Mesh / MDF / Tex / Motlist 预览，模型组装与动画播放" TextWrapping="Wrap"/>
+            <TextBlock Text="• SCN / PFB 场景解析、合并预览与场景 FBX 导出" TextWrapping="Wrap"/>
+            <TextBlock Text="• List 下载管理、游戏目录自动匹配与在线更新" TextWrapping="Wrap"/>
+            <TextBlock Text="• 已验证游戏：《鬼武者：剑之道》DEMO、《鬼泣 5》"
+                       TextWrapping="Wrap"/>
+            <TextBlock Text="  《怪物猎人：崛起》、《怪物猎人：荒野》、《街头霸王 6》"
+                       TextWrapping="Wrap"/>
           </StackPanel>
         </Border>
 
         <TextBlock Text="技术：.NET 10 · Avalonia · RE-Engine-Lib · Blender FBX" Foreground="#aab2c0"/>
+        <TextBlock Text="项目与更新：https://github.com/PieceMetal/ReExtractor"
+                   TextWrapping="Wrap" Foreground="#9cdcfe"/>
         <TextBlock Text="解析核心：RE-Engine-Lib（MIT License）" FontWeight="SemiBold"/>
         <SelectableTextBlock Text="https://github.com/kagenocookie/RE-Engine-Lib"
                              TextWrapping="Wrap" Foreground="#9cdcfe"/>
