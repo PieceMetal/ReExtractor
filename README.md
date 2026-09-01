@@ -10,7 +10,12 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 > 请在 Releases 页面选择所需版本的 Windows x64 构建包，完整解压后运行带版本号的 `ReExtractor-vX.Y.Z.exe`。请保留同目录的 `libGDeflate.dll`；运行数据会自动生成在程序旁。
 
-当前版本：`v1.3.4`
+当前版本：`v1.3.5`
+
+## v1.3.5 更新
+
+- 修复 Windows PowerShell 5.1 将无 BOM UTF-8 更新脚本按本地代码页读取、导致中文安装路径升级失败的问题。
+- 更新脚本失败时会写入 `ReExtractor-tools/logs/update.log`，不再只关闭窗口而没有可查信息。
 
 ## v1.3.4 更新
 

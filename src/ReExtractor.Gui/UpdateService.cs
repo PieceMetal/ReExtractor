@@ -123,6 +123,9 @@ public sealed class UpdateService
         var script = string.Join(Environment.NewLine,
         [
             "$ErrorActionPreference = 'Stop'",
+            $"$updateLog = Join-Path {PsQuote(currentDirectory)} 'ReExtractor-tools\\logs\\update.log'",
+            "New-Item -ItemType Directory -Path (Split-Path -Parent $updateLog) -Force | Out-Null",
+            "try {",
             $"$oldPid = {Environment.ProcessId}",
             "while (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 250 }",
             // Keep the version in the executable file name. Previous versions stay
@@ -134,10 +137,17 @@ public sealed class UpdateService
             $"$currentNative = Join-Path {PsQuote(currentDirectory)} 'libGDeflate.dll'",
             "if (Test-Path -LiteralPath $newNative) { Copy-Item -LiteralPath $newNative -Destination $currentNative -Force }",
             $"Start-Process -FilePath {PsQuote(versionedExe)} -WorkingDirectory {PsQuote(currentDirectory)}",
+            "  Add-Content -LiteralPath $updateLog -Value ('{0:o} 更新完成' -f (Get-Date))",
             $"Remove-Item -LiteralPath {PsQuote(update.StagingDirectory)} -Recurse -Force -ErrorAction SilentlyContinue",
             "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+            "} catch {",
+            "  Add-Content -LiteralPath $updateLog -Value ('{0:o} 更新失败: {1}' -f (Get-Date), $_.Exception.Message)",
+            "  exit 1",
+            "}",
         ]);
-        File.WriteAllText(scriptPath, script, new UTF8Encoding(false));
+        // Windows PowerShell 5.1 treats UTF-8 without a BOM as the active ANSI code page.
+        // A BOM preserves Chinese (and other non-ASCII) install paths in the update script.
+        File.WriteAllText(scriptPath, script, new UTF8Encoding(true));
         Process.Start(new ProcessStartInfo
         {
             FileName = "powershell.exe",
