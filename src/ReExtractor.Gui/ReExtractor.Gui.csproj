@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>1.3.5</Version>
-    <AssemblyVersion>1.3.5.0</AssemblyVersion>
-    <FileVersion>1.3.5.0</FileVersion>
+    <Version>1.3.6</Version>
+    <AssemblyVersion>1.3.6.0</AssemblyVersion>
+    <FileVersion>1.3.6.0</FileVersion>
     <AssemblyName>ReExtractor-v$(Version)</AssemblyName>
     <Authors>PieceMetal</Authors>
     <Description>RE Engine 资源解包、预览与 FBX 导出工具</Description>
@@ -40,28 +40,18 @@
     <ProjectReference Include="..\ReExtractor.Core\ReExtractor.Core.csproj" />
   </ItemGroup>
 
-  <!-- GDeflateNet uses a native libdeflate wrapper. Keep the DLL beside the
-       single-file GUI so its DllImport resolver can load compressed MHW TEX
-       files after publishing (content is not embedded by IncludeNativeLibrariesForSelfExtract). -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64' Or '$(RuntimeIdentifier)' == ''">
-    <Content Include="..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll"
-             Link="libGDeflate.dll"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
   <ItemGroup>
     <EmbeddedResource Include="..\..\tools\export_models_fbx.py" Link="EmbeddedTools\export_models_fbx.py" />
     <EmbeddedResource Include="..\..\tools\export_animations_fbx.py" Link="EmbeddedTools\export_animations_fbx.py" />
+    <EmbeddedResource Include="..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll"
+                      Link="EmbeddedNative\libGDeflate.dll" />
   </ItemGroup>
 
-  <!-- PublishSingleFile bundles ordinary Content items into the executable, but
-       GDeflateNet's resolver needs the native DLL as a real neighboring file. -->
-  <Target Name="CopyGDeflateNativeAfterPublish" AfterTargets="Publish"
+  <!-- The application extracts this embedded DLL before any TEX decoder is used.
+       Remove the ProjectReference sidecar so each release ZIP contains one EXE. -->
+  <Target Name="RemoveGDeflateSidecarAfterPublish" AfterTargets="Publish"
           Condition="'$(RuntimeIdentifier)' == 'win-x64'">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll"
-          DestinationFolder="$(PublishDir)"
-          SkipUnchangedFiles="true" />
+    <Delete Files="$(PublishDir)libGDeflate.dll" />
   </Target>
 
   <Target Name="RemovePublishSymbols" AfterTargets="Publish">

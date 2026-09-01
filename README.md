@@ -10,7 +10,12 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 > 请在 Releases 页面选择所需版本的 Windows x64 构建包，完整解压后运行带版本号的 `ReExtractor-vX.Y.Z.exe`。请保留同目录的 `libGDeflate.dll`；运行数据会自动生成在程序旁。
 
-当前版本：`v1.3.5`
+当前版本：`v1.3.6`
+
+## v1.3.6 更新
+
+- 发布 ZIP 仅包含一个带版本号的 EXE，不再附带工具、预设、许可证、兼容副本或原生 DLL。
+- EXE 首次启动时会自动释放 GDeflate 解码库，贴图解码能力保持不变。
 
 ## v1.3.5 更新
 

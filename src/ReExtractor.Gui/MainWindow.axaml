@@ -3,7 +3,7 @@
         xmlns:local="clr-namespace:ReExtractor.Gui"
         x:Class="ReExtractor.Gui.MainWindow"
         Icon="/Assets/AppIcon.ico"
-        Title="ReExtractor v1.3.5 — RE 引擎资源工作台"
+        Title="ReExtractor v1.3.6 — RE 引擎资源工作台"
         Width="1440" Height="860" WindowState="Maximized"
         KeyDown="OnMainWindowKeyDown"
         Background="#16191f">
@@ -12,7 +12,7 @@
     <Border x:Name="TitleStrip" DockPanel.Dock="Top" Margin="-12,-12,-12,0" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,0,0,1" Padding="14,8">
       <Grid ColumnDefinitions="Auto,*">
-        <TextBlock Grid.Column="0" Text="◆  RE Engine 资源工具 v1.3.5" Foreground="#7fc3ff"
+        <TextBlock Grid.Column="0" Text="◆  RE Engine 资源工具 v1.3.6" Foreground="#7fc3ff"
                    FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
       </Grid>
     </Border>
