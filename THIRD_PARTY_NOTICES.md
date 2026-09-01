@@ -21,6 +21,12 @@ ReExtractor 使用以下第三方项目。具体许可证文本以各上游项�
 - 许可证：MIT License
 - 用途：OpenGL 预览视口。
 
+## GDeflateNet
+
+- 上游：https://github.com/neptuwunium/GDeflateNet
+- 许可证：MIT License
+- 用途：解压采用 GDeflate 压缩的 RE Engine TEX 贴图。
+
 ## Blender
 
 - 上游：https://www.blender.org/

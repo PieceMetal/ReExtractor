@@ -8,9 +8,17 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 ## [⬇ 查看 GitHub Releases 构建包](https://github.com/PieceMetal/ReExtractor/releases)
 
-> 请在 Releases 页面选择所需版本的 Windows x64 构建包，解压后运行 `ReExtractor.Gui.exe`。压缩包内只有一个 EXE，运行数据会自动生成在程序旁。
+> 请在 Releases 页面选择所需版本的 Windows x64 构建包，完整解压后运行 `ReExtractor.Gui.exe`。请保留同目录的 `libGDeflate.dll`；运行数据会自动生成在程序旁。
 
-当前版本：`v1.2.6`
+当前版本：`v1.3.2`
+
+## v1.3.2 更新
+
+- 新增 GDeflate TEX 解压支持，修复《怪物猎人：荒野》和《怪物猎人物语 3》部分贴图无法读取、呈现噪点或显示为灰色的问题。
+- 新增《怪物猎人物语 3》角色材质适配：支持 ALBR、BCLO 毛发、角色发色/眉毛色、眼睛 COLR 色层与瞳色，以及眼部折射镜片和 toon 轮廓壳过滤。
+- 优化角色分件预览：合并加载可复用已解码底图，避免同一张大贴图被重复解码；加载期间锁定界面，防止切换资源导致串模型或按钮失效。
+- 修复预设加载后的贴图请求状态、荒野 Steam 路径自动匹配和说明窗口 Esc 关闭。
+- 在线更新会同时更新 GDeflate 原生解码库。
 
 ## v1.2.6 更新
 
@@ -110,14 +118,16 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 | --- | --- |
 | 《鬼武者：剑之道》DEMO | 已在样本上验证 PAK、贴图、模型、骨架、动画预览与 FBX 导出工作流 |
 | 《街头霸王 6》 | 已在样本上验证 PAK、list、模型基础材质与贴图读取；动画仍属于实验性支持 |
+| 《怪物猎人：荒野》 | 已验证 GDeflate 贴图解压、角色模型分件与基础材质预览 |
+| 《怪物猎人物语 3》 | 已验证 PAK、角色身体/头部/毛发分件、ALBR/BCLO 贴图与眼睛颜色层预览 |
 | 其他 RE Engine 游戏 | 取决于 PAK 版本、路径 list、Mesh / TEX / MDF / MotionList 格式版本 |
 
 新游戏并不是只更换 list 就能完整支持。PAK 解包、模型、贴图、材质和动画格式都可能需要针对真实样本适配。
 
 ## 下载与使用
 
-1. 在 GitHub Releases 下载最新的 Windows x64 压缩包；压缩包内只有 `ReExtractor.Gui.exe`。
-2. 将 EXE 解压到一个可写目录并运行，程序会在同级目录自动生成运行所需文件夹。
+1. 在 GitHub Releases 下载最新的 Windows x64 压缩包，并完整解压。
+2. 保留 `ReExtractor.Gui.exe` 和同目录的 `libGDeflate.dll`，将它们放在可写目录并运行；程序会在同级目录自动生成运行所需文件夹。
 3. 首次启动时检查环境；FBX 导出需要安装 Blender，并在设置中选择 `blender.exe`。
 4. 在路径列表中选择或下载对应游戏的 list。
 5. 选择游戏文件夹扫描 PAK，或直接拖入 / 打开 PAK 文件。
@@ -177,6 +187,7 @@ dotnet run --project src/ReExtractor.Gui/ReExtractor.Gui.csproj
 - RE-Engine-Lib：MIT License
 - Avalonia：MIT License
 - Silk.NET：MIT License
+- GDeflateNet：MIT License
 - Blender：由用户独立安装，并遵守 Blender 自身许可证
 
 详细信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

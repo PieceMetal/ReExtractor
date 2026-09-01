@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ReExtractor.Gui.UpdateWindow"
+        Icon="/Assets/AppIcon.ico" Title="ReExtractor 在线更新"
+        Width="620" Height="470" CanResize="False"
+        WindowStartupLocation="CenterOwner" Background="#16191f">
+  <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="22">
+    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+      <TextBlock x:Name="TitleText" Text="发现新版本" FontSize="22" FontWeight="SemiBold"/>
+      <TextBlock x:Name="VersionText" Foreground="#7fc3ff" Margin="0,6,0,0"/>
+    </StackPanel>
+    <Border Grid.Row="1" Background="#20252d" BorderBrush="#303947" BorderThickness="1"
+            CornerRadius="6" Padding="14">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <TextBlock x:Name="NotesText" TextWrapping="Wrap" Foreground="#d2d8e1"/>
+      </ScrollViewer>
+    </Border>
+    <StackPanel Grid.Row="2" Margin="0,14,0,0">
+      <TextBlock x:Name="StatusText" Text="更新包将下载到临时目录，完成后自动替换并重启。"
+                 Foreground="#9aa6b5" TextWrapping="Wrap"/>
+      <ProgressBar x:Name="DownloadProgress" Minimum="0" Maximum="100" Height="7"
+                   Margin="0,9,0,0" IsVisible="False"/>
+    </StackPanel>
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+      <Button x:Name="LaterButton" Content="稍后再说" Click="OnLater" Padding="18,7" Margin="0,0,8,0"/>
+      <Button x:Name="InstallButton" Content="下载并安装" Click="OnInstall" Padding="18,7"
+              Background="#0e72d8" Foreground="White"/>
+    </StackPanel>
+  </Grid>
+</Window>
