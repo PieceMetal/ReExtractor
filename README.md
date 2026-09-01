@@ -8,9 +8,14 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 ## [⬇ 查看 GitHub Releases 构建包](https://github.com/PieceMetal/ReExtractor/releases)
 
-> 请在 Releases 页面选择所需版本的 Windows x64 构建包，完整解压后运行 `ReExtractor.Gui.exe`。请保留同目录的 `libGDeflate.dll`；运行数据会自动生成在程序旁。
+> 请在 Releases 页面选择所需版本的 Windows x64 构建包，完整解压后运行带版本号的 `ReExtractor-vX.Y.Z.exe`。请保留同目录的 `libGDeflate.dll`；运行数据会自动生成在程序旁。
 
-当前版本：`v1.3.2`
+当前版本：`v1.3.3`
+
+## v1.3.3 更新
+
+- 发布 ZIP、解压目录、可执行文件和窗口标题均显示完整版本号，便于多版本并存和回退。
+- 在线更新不再覆盖旧 EXE；会写入并启动新版本文件，保留旧版本作为回退入口。
 
 ## v1.3.2 更新
 
@@ -127,7 +132,7 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 ## 下载与使用
 
 1. 在 GitHub Releases 下载最新的 Windows x64 压缩包，并完整解压。
-2. 保留 `ReExtractor.Gui.exe` 和同目录的 `libGDeflate.dll`，将它们放在可写目录并运行；程序会在同级目录自动生成运行所需文件夹。
+2. 保留 `ReExtractor-vX.Y.Z.exe` 和同目录的 `libGDeflate.dll`，将它们放在可写目录并运行；程序会在同级目录自动生成运行所需文件夹。
 3. 首次启动时检查环境；FBX 导出需要安装 Blender，并在设置中选择 `blender.exe`。
 4. 在路径列表中选择或下载对应游戏的 list。
 5. 选择游戏文件夹扫描 PAK，或直接拖入 / 打开 PAK 文件。

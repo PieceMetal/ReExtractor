@@ -87,9 +87,13 @@ public sealed class UpdateService
 
             var extracted = Path.Combine(staging, "extracted");
             ZipFile.ExtractToDirectory(archivePath, extracted);
-            var newExe = Directory.EnumerateFiles(extracted, "ReExtractor.Gui.exe",
+            var newExe = Directory.EnumerateFiles(extracted, "ReExtractor-v*.exe",
                     SearchOption.AllDirectories).FirstOrDefault()
-                ?? throw new InvalidDataException("更新包内没有 ReExtractor.Gui.exe");
+                // Accept legacy packages so installations can still recover from
+                // a manually downloaded pre-v1.3.3 build.
+                ?? Directory.EnumerateFiles(extracted, "ReExtractor.Gui.exe",
+                    SearchOption.AllDirectories).FirstOrDefault()
+                ?? throw new InvalidDataException("更新包内没有带版本号的 ReExtractor 可执行文件");
             var fileVersionText = FileVersionInfo.GetVersionInfo(newExe).FileVersion;
             if (!Version.TryParse(fileVersionText, out var fileVersion) || fileVersion < release.Version)
                 throw new InvalidDataException(
@@ -112,6 +116,8 @@ public sealed class UpdateService
             throw new PlatformNotSupportedException("当前自动更新仅支持 Windows");
 
         static string PsQuote(string value) => "'" + value.Replace("'", "''") + "'";
+        var currentDirectory = Path.GetDirectoryName(currentExe)!;
+        var versionedExe = Path.Combine(currentDirectory, Path.GetFileName(update.NewExecutable));
         var scriptPath = Path.Combine(Path.GetTempPath(),
             $"ReExtractor-updater-{Guid.NewGuid():N}.ps1");
         var script = string.Join(Environment.NewLine,
@@ -119,13 +125,15 @@ public sealed class UpdateService
             "$ErrorActionPreference = 'Stop'",
             $"$oldPid = {Environment.ProcessId}",
             "while (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 250 }",
-            $"Copy-Item -LiteralPath {PsQuote(update.NewExecutable)} -Destination {PsQuote(currentExe)} -Force",
+            // Keep the version in the executable file name. Previous versions stay
+            // available as a rollback option instead of being overwritten in place.
+            $"Copy-Item -LiteralPath {PsQuote(update.NewExecutable)} -Destination {PsQuote(versionedExe)} -Force",
             // The portable package has a native GDeflate decoder beside the EXE.
             // Keep the current app usable when updating from a pre-GDeflate build.
             $"$newNative = Join-Path {PsQuote(update.PackageDirectory)} 'libGDeflate.dll'",
-            $"$currentNative = Join-Path {PsQuote(Path.GetDirectoryName(currentExe)!)} 'libGDeflate.dll'",
+            $"$currentNative = Join-Path {PsQuote(currentDirectory)} 'libGDeflate.dll'",
             "if (Test-Path -LiteralPath $newNative) { Copy-Item -LiteralPath $newNative -Destination $currentNative -Force }",
-            $"Start-Process -FilePath {PsQuote(currentExe)} -WorkingDirectory {PsQuote(Path.GetDirectoryName(currentExe)!)}",
+            $"Start-Process -FilePath {PsQuote(versionedExe)} -WorkingDirectory {PsQuote(currentDirectory)}",
             $"Remove-Item -LiteralPath {PsQuote(update.StagingDirectory)} -Recurse -Force -ErrorAction SilentlyContinue",
             "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
         ]);
