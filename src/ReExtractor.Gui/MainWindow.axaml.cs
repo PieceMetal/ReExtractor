@@ -1521,9 +1521,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 {
                     var png = await Task.Run(() =>
                     {
-                        using var ms = _pak.ReadFile(path);
+                        using var ms = _pak.ReadPreferredTextureFile(path, out var resolvedPath);
                         var outPng = Path.Combine(_tempDir, "preview_tex.png");
-                        new TexService().ConvertToPng(ms, path, outPng);
+                        new TexService().ConvertToPng(ms, resolvedPath, outPng);
                         return outPng;
                     });
                     if (IsStale()) return;
@@ -2614,15 +2614,20 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         {
             var result = await Task.Run(() =>
             {
-                using var ms = _pak.ReadFile(path);
                 switch (kind)
                 {
                     case "tex":
-                        return new TexService().ConvertToPng(ms, path,
+                    {
+                        using var texStream = _pak.ReadPreferredTextureFile(path, out var resolvedPath);
+                        return new TexService().ConvertToPng(texStream, resolvedPath,
                             Path.Combine(outDir, Path.GetFileNameWithoutExtension(path) + ".png"));
+                    }
                     case "mesh":
+                    {
+                        using var ms = _pak.ReadFile(path);
                         return new MeshService().ConvertToGlb(ms, path,
                             Path.Combine(outDir, Path.GetFileNameWithoutExtension(path) + ".glb"));
+                    }
                     default:
                         return _pak.ExtractFile(path, outDir);
                 }
@@ -2671,8 +2676,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var path = textures[index];
             try
             {
-                using var stream = pak.ReadFile(path);
-                new TexService().ConvertToPng(stream, path, TextureExportPath(outputRoot, path));
+                using var stream = pak.ReadPreferredTextureFile(path, out var resolvedPath);
+                new TexService().ConvertToPng(stream, resolvedPath, TextureExportPath(outputRoot, path));
                 exported++;
             }
             catch (Exception ex)

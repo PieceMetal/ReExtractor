@@ -174,6 +174,74 @@ public sealed class PakService
         throw new FileNotFoundException($"Entry not found in any loaded PAK: {nativePath}");
     }
 
+    /// <summary>
+    /// Read a TEX resource at its highest available resolution.
+    ///
+    /// Recent RE Engine games keep a small resident texture at the ordinary
+    /// natives path and put the full mip chain under natives/&lt;platform&gt;/streaming.
+    /// Direct preview/export used to open the selected resident entry verbatim,
+    /// producing 64x64 or 256x256 PNG files even when a 2K streaming texture was
+    /// present. Material loading already prefers the streaming variant; direct
+    /// TEX operations must follow the same rule.
+    /// </summary>
+    public MemoryStream ReadPreferredTextureFile(string nativePath, out string resolvedPath)
+    {
+        foreach (var candidate in PreferredTexturePathCandidates(nativePath))
+        {
+            try
+            {
+                var stream = ReadFile(candidate);
+                resolvedPath = candidate;
+                return stream;
+            }
+            catch (FileNotFoundException)
+            {
+                // Try the resident/original path after the full-resolution candidate.
+            }
+        }
+
+        resolvedPath = nativePath;
+        throw new FileNotFoundException($"Entry not found in any loaded PAK: {nativePath}");
+    }
+
+    internal static IReadOnlyList<string> PreferredTexturePathCandidates(string nativePath)
+    {
+        var path = nativePath.Replace('\\', '/').TrimStart('/');
+        var candidates = new List<string>(2);
+
+        void Add(string candidate)
+        {
+            if (!candidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                candidates.Add(candidate);
+        }
+
+        if (path.Contains("/streaming/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("streaming/", StringComparison.OrdinalIgnoreCase))
+        {
+            Add(path);
+            return candidates;
+        }
+
+        if (path.StartsWith("natives/", StringComparison.OrdinalIgnoreCase))
+        {
+            var platformEnd = path.IndexOf('/', "natives/".Length);
+            if (platformEnd >= 0)
+                Add(path[..(platformEnd + 1)] + "streaming/" + path[(platformEnd + 1)..]);
+        }
+        else if (path.StartsWith("STM/", StringComparison.OrdinalIgnoreCase))
+        {
+            Add(path[..4] + "streaming/" + path[4..]);
+        }
+        else
+        {
+            // Supports convenience extraction folders mounted without natives/stm.
+            Add("streaming/" + path);
+        }
+
+        Add(path);
+        return candidates;
+    }
+
     private MemoryStream? TryReadPakFile(int pakIndex, ulong hash)
     {
         if ((uint)pakIndex >= (uint)_pakFiles.Count) return null;

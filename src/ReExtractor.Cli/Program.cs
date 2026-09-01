@@ -84,11 +84,11 @@ switch (command)
         var nativePath = positional.ElementAtOrDefault(1);
         var outDir = GetOpt("--out") ?? "output";
         if (nativePath == null) { Console.WriteLine("tex2png requires a native path"); return 1; }
-        using var ms = pak.ReadFile(nativePath);
+        using var ms = pak.ReadPreferredTextureFile(nativePath, out var resolvedPath);
         var pngName = Path.GetFileNameWithoutExtension(nativePath) + ".png";
         var outPath = Path.Combine(outDir, pngName);
         var tex = new TexService();
-        tex.ConvertToPng(ms, nativePath, outPath);
+        tex.ConvertToPng(ms, resolvedPath, outPath);
         Console.WriteLine($"[tex2png] -> {outPath}");
         return 0;
     }
