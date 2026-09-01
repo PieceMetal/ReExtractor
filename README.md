@@ -2,13 +2,13 @@
 
 ![ReExtractor 图标](src/ReExtractor.Gui/Assets/AppIcon.png)
 
-ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载游戏 PAK，配合路径 list 浏览资源，并预览、提取、合并和导出模型、贴图、骨架与动画。
+ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载游戏 PAK，配合路径 list 浏览资源，并预览、提取、组合和导出模型、贴图、骨架与动画。当前发布包为单 EXE，适合多个版本并存、直接对比和回退。
 
 项目定位是解包、预览和导出。它不提供 Mod 编辑、PAK 重新打包或游戏资源传播服务。
 
 ## [⬇ 查看 GitHub Releases 构建包](https://github.com/PieceMetal/ReExtractor/releases)
 
-> 请在 Releases 页面选择所需版本的 Windows x64 构建包，完整解压后运行带版本号的 `ReExtractor-vX.Y.Z.exe`。请保留同目录的 `libGDeflate.dll`；运行数据会自动生成在程序旁。
+> 请在 Releases 页面选择所需版本的 Windows x64 构建包，解压后运行唯一的 `ReExtractor-vX.Y.Z.exe`。首次启动会自动释放必要的贴图解码库，并在程序旁生成设置、日志、路径 list 和导出目录。
 
 当前版本：`v1.3.6`
 
@@ -16,6 +16,7 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 - 发布 ZIP 仅包含一个带版本号的 EXE，不再附带工具、预设、许可证、兼容副本或原生 DLL。
 - EXE 首次启动时会自动释放 GDeflate 解码库，贴图解码能力保持不变。
+- v1.3.5 及之后可使用内置“检查更新”；更新脚本支持中文安装路径，并保留旧版 EXE 作为回退入口。
 
 ## v1.3.5 更新
 
@@ -147,7 +148,7 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 ## 下载与使用
 
 1. 在 GitHub Releases 下载最新的 Windows x64 压缩包，并完整解压。
-2. 保留 `ReExtractor-vX.Y.Z.exe` 和同目录的 `libGDeflate.dll`，将它们放在可写目录并运行；程序会在同级目录自动生成运行所需文件夹。
+2. 将唯一的 `ReExtractor-vX.Y.Z.exe` 放在可写目录并运行；程序会在同级目录自动生成运行所需文件夹和贴图解码库。
 3. 首次启动时检查环境；FBX 导出需要安装 Blender，并在设置中选择 `blender.exe`。
 4. 在路径列表中选择或下载对应游戏的 list。
 5. 选择游戏文件夹扫描 PAK，或直接拖入 / 打开 PAK 文件。
@@ -167,11 +168,12 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 ## 目录结构
 
-默认导出目录位于程序 EXE 同级，其他运行数据位于 `ReExtractor-tools` 目录：
+默认导出目录位于程序 EXE 同级，其他运行数据会在首次启动后生成：
 
 ```text
 ReExtractor/
-├─ ReExtractor.Gui.exe
+├─ ReExtractor-v1.3.6.exe  # 发布包中唯一的文件
+├─ libGDeflate.dll         # 首次启动后自动释放的贴图解码库
 ├─ output/                  # 默认导出目录
 └─ ReExtractor-tools/
    ├─ filelists/            # 本地路径 list
@@ -180,6 +182,12 @@ ReExtractor/
    ├─ logs/                 # 运行日志
    └─ tools/                # 内置转换脚本缓存
 ```
+
+## 更新与版本管理
+
+- 主菜单“检查更新…”会检测 GitHub 最新正式版；v1.3.5 起支持中文路径安装目录。
+- 更新完成后会在当前目录写入新的 `ReExtractor-vX.Y.Z.exe`，不会覆盖旧版本；请按文件名中的版本号启动或回退。
+- 早于 v1.3.5 的旧版不支持中文路径下的自动升级，建议手动下载并运行 v1.3.6。
 
 ## 源码构建
 
