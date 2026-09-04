@@ -119,8 +119,13 @@ public sealed class FileListManagerService
         }
 
         FileListManifest curatedManifest;
+        // The published executable has a versioned AssemblyName (for example
+        // ReExtractor-vX.Y.Z), so the old hard-coded ReExtractor.Gui URI does
+        // not resolve its embedded Avalonia resource in release builds.
+        var resourceAssemblyName = typeof(FileListManagerService).Assembly.GetName().Name
+            ?? throw new InvalidOperationException("无法确定资源程序集名称");
         await using (var stream = AssetLoader.Open(
-            new Uri("avares://ReExtractor.Gui/Assets/ekey_filelist_manifest.json")))
+            new Uri($"avares://{resourceAssemblyName}/Assets/ekey_filelist_manifest.json")))
         {
             curatedManifest = await JsonSerializer.DeserializeAsync<FileListManifest>(stream, cancellationToken: cancellationToken)
                 ?? throw new InvalidDataException("内置精选列表目录损坏");

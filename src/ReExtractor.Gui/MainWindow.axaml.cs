@@ -3077,11 +3077,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     }
 
     private static bool SameSkeleton(ViewportMesh a, ViewportMesh b)
-    {
-        if (a.Bones.Length != b.Bones.Length) return false;
-        var setA = new HashSet<string>(a.Bones.Select(x => x.Name), StringComparer.OrdinalIgnoreCase);
-        return setA.SetEquals(b.Bones.Select(x => x.Name));
-    }
+        => ViewportMesh.TryGetMergeCompatibility([a, b], out _);
 
     private async void OnMergeLoadClicked(object? sender, RoutedEventArgs e)
     {
@@ -3126,10 +3122,12 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (meshes.Count == 0)
                 throw new InvalidDataException("队列中的模型均不包含可显示的几何数据");
 
-            // smart check: if every queued model shares the same bone-name set, geometrically
-            // merge into ONE mesh and play a single animation (Noesis-style, same character parts);
-            // otherwise load the first as primary and the rest as independent animated extras.
-            var shouldMerge = meshes.Count > 1 && meshes.All(m => SameSkeleton(meshes[0], m));
+            // Bone names alone are not a safe merge key. MHRise parts can have the same named
+            // bones but different bind-space origins; sharing one armature then separates the
+            // body and clothing as soon as a motion is applied.
+            var mergeReason = string.Empty;
+            var shouldMerge = meshes.Count > 1 &&
+                              ViewportMesh.TryGetMergeCompatibility(meshes, out mergeReason);
             ShowViewport();
             SetPreviewMeshPaths(loadedPaths.ToArray());
             ClearMotionState();
@@ -3147,7 +3145,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 RefreshVisconGroups();
                 for (var i = 1; i < meshes.Count; i++)
                     Viewport.AddMesh(meshes[i], loadedPaths[i].Split('/')[^1]);
-                var verb = meshes.Count > 1 ? $"已加载 {meshes.Count} 个模型（未加载贴图，骨骼不同 → 按主模型同步动画）" : "模型已加载（未加载贴图）";
+                var verb = meshes.Count > 1
+                    ? $"已加载 {meshes.Count} 个模型（保持独立骨架：{mergeReason} → 按主模型同步动画）"
+                    : "模型已加载（未加载贴图）";
                 ActionStatus.Text = $"{verb} | 导出包含 {loadedPaths.Count} 个有效源模型" +
                     (skipped.Count > 0 ? $" | 跳过 {skipped.Count} 个无几何占位模型" : "") +
                     $" | {Viewport.StatusInfo}";

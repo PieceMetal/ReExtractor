@@ -73,6 +73,8 @@ public sealed class ViewportMesh
         if (meshes == null || meshes.Count == 0)
             throw new ArgumentException("need at least one mesh", nameof(meshes));
         if (meshes.Count == 1) return meshes[0];
+        if (!TryGetMergeCompatibility(meshes, out var incompatibility))
+            throw new InvalidOperationException($"这些模型不能共享一副骨架：{incompatibility}");
 
         var verts = new List<Vector3>();
         var normals = new List<Vector3>();
@@ -296,6 +298,111 @@ public sealed class ViewportMesh
             DeformToBone = deformToBone.ToArray(),
             VisconInfo = $"merged {meshes.Count} meshes",
         };
+    }
+
+    /// <summary>
+    /// Determines whether parts can safely be collapsed onto one armature.  Bone names alone
+    /// are not sufficient: some RE Engine character parts use the same names but a different
+    /// bind-space origin (for example, a waist-relative accessory alongside a ground-rooted
+    /// body).  Rebinding such a part by name makes it explode as soon as animation is applied.
+    /// </summary>
+    public static bool TryGetMergeCompatibility(IReadOnlyList<ViewportMesh> meshes, out string reason)
+    {
+        reason = string.Empty;
+        if (meshes == null || meshes.Count == 0)
+        {
+            reason = "没有可合并的模型";
+            return false;
+        }
+
+        var reference = meshes[0];
+        if (reference.Bones.Length == 0 || reference.DeformToBone.Length == 0)
+        {
+            reason = "主模型没有可用骨架";
+            return false;
+        }
+
+        var referenceByName = UniqueBonesByName(reference, out var referenceDuplicates);
+        if (referenceDuplicates != null)
+        {
+            reason = $"主模型存在重复骨骼名：{referenceDuplicates}";
+            return false;
+        }
+
+        for (var meshIndex = 1; meshIndex < meshes.Count; meshIndex++)
+        {
+            var candidate = meshes[meshIndex];
+            if (candidate.Bones.Length != reference.Bones.Length ||
+                candidate.DeformToBone.Length == 0)
+            {
+                reason = $"第 {meshIndex + 1} 个分件的骨架数量不同";
+                return false;
+            }
+
+            var candidateByName = UniqueBonesByName(candidate, out var candidateDuplicates);
+            if (candidateDuplicates != null)
+            {
+                reason = $"第 {meshIndex + 1} 个分件存在重复骨骼名：{candidateDuplicates}";
+                return false;
+            }
+
+            foreach (var (name, referenceIndex) in referenceByName)
+            {
+                if (!candidateByName.TryGetValue(name, out var candidateIndex))
+                {
+                    reason = $"第 {meshIndex + 1} 个分件缺少骨骼 {name}";
+                    return false;
+                }
+
+                var a = reference.Bones[referenceIndex];
+                var b = candidate.Bones[candidateIndex];
+                var aParent = a.ParentIndex >= 0 && a.ParentIndex < reference.Bones.Length
+                    ? reference.Bones[a.ParentIndex].Name : null;
+                var bParent = b.ParentIndex >= 0 && b.ParentIndex < candidate.Bones.Length
+                    ? candidate.Bones[b.ParentIndex].Name : null;
+                if (!string.Equals(aParent, bParent, StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = $"第 {meshIndex + 1} 个分件的 {name} 父级不同";
+                    return false;
+                }
+
+                if (!NearlyEqual(a.LocalBind, b.LocalBind) ||
+                    !NearlyEqual(a.InverseGlobalBind, b.InverseGlobalBind))
+                {
+                    reason = $"第 {meshIndex + 1} 个分件的 {name} 静止绑定矩阵不同";
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static Dictionary<string, int> UniqueBonesByName(ViewportMesh mesh, out string? duplicate)
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (bone, index) in mesh.Bones.Select((bone, index) => (bone, index)))
+        {
+            if (!result.TryAdd(bone.Name, index))
+            {
+                duplicate = bone.Name;
+                return result;
+            }
+        }
+        duplicate = null;
+        return result;
+    }
+
+    private static bool NearlyEqual(Matrix4x4 a, Matrix4x4 b)
+    {
+        const float relativeTolerance = 1e-5f;
+        return NearlyEqual(a.M11, b.M11) && NearlyEqual(a.M12, b.M12) && NearlyEqual(a.M13, b.M13) && NearlyEqual(a.M14, b.M14) &&
+               NearlyEqual(a.M21, b.M21) && NearlyEqual(a.M22, b.M22) && NearlyEqual(a.M23, b.M23) && NearlyEqual(a.M24, b.M24) &&
+               NearlyEqual(a.M31, b.M31) && NearlyEqual(a.M32, b.M32) && NearlyEqual(a.M33, b.M33) && NearlyEqual(a.M34, b.M34) &&
+               NearlyEqual(a.M41, b.M41) && NearlyEqual(a.M42, b.M42) && NearlyEqual(a.M43, b.M43) && NearlyEqual(a.M44, b.M44);
+
+        static bool NearlyEqual(float left, float right)
+            => MathF.Abs(left - right) <= relativeTolerance * MathF.Max(1f, MathF.Max(MathF.Abs(left), MathF.Abs(right)));
     }
 }
 
@@ -1362,6 +1469,11 @@ public static class ViewportDataLoader
     private static bool IsPreviewHelperMaterial(string name)
         => name.Contains("EffectEmitter", StringComparison.OrdinalIgnoreCase)
            || name.Contains("VFXEmitter", StringComparison.OrdinalIgnoreCase)
+           // MHR NPC body meshes can carry item/prop geometry in the same mesh
+           // (for example npc102_00_body's nitem_028_002 group).  These are
+           // not character surfaces and otherwise appear as large grey slabs
+           // in the generic preview.
+           || name.StartsWith("nitem_", StringComparison.OrdinalIgnoreCase)
            // Wilds character assets retain a pair of DCC/runtime volume passes. They use
            // Simple_VolumeBlend with no authored colour texture, so the generic preview
            // paints them as solid grey over the actual garment. They are not renderable
@@ -1621,7 +1733,6 @@ public static class ViewportDataLoader
                     if (hashToBone.TryGetValue(MurMur3HashUtils.GetHash(name), out var target))
                         tracks[target.Index] = track;
         }
-
         return new AnimationClip
         {
             Name = $"mot_{motion.motNumber}", Duration = duration,
@@ -2190,7 +2301,11 @@ public static class ViewportDataLoader
         var originalBoneCount = mesh.Bones.Length;
         var byName = mesh.Bones
             .Select((bone, index) => (bone, index))
-            .ToDictionary(item => item.bone.Name, item => item.index,
+            // Some Rise/Sunbreak NPC meshes legitimately repeat helper-bone names
+            // (npc615_00 contains two wst_chain_end entries).  They are separate source
+            // indices but either occurrence proves the named MOT helper already exists.
+            .GroupBy(item => item.bone.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().index,
                 StringComparer.OrdinalIgnoreCase);
         var sourceByName = motionBones
             .Where(bone => !string.IsNullOrWhiteSpace(bone.boneName))
