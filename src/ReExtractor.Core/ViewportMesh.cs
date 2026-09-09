@@ -73,7 +73,7 @@ public sealed class ViewportMesh
         if (meshes == null || meshes.Count == 0)
             throw new ArgumentException("need at least one mesh", nameof(meshes));
         if (meshes.Count == 1) return meshes[0];
-        if (!TryGetMergeCompatibility(meshes, out var incompatibility))
+        if (!TryGetSkeletonUnionCompatibility(meshes, out var incompatibility))
             throw new InvalidOperationException($"这些模型不能共享一副骨架：{incompatibility}");
 
         var verts = new List<Vector3>();
@@ -204,6 +204,23 @@ public sealed class ViewportMesh
         // --- merge geometry + textures + weights + deform map ---
         var deformToBone = new List<int>();
         var deformJointByBone = new Dictionary<int, int>();
+        var rigidJoint = -1;
+        if (meshes.Any(mesh => mesh.DeformToBone.Length > 0) &&
+            meshes.Any(mesh => mesh.DeformToBone.Length == 0 && mesh.VertexCount > 0))
+        {
+            // Rigid geometry in a mixed export must not inherit the first deform bone's
+            // animation through the exporter's fallback weight for unweighted vertices.
+            var rigidName = "__ReExtractor_Static";
+            while (boneNameToIdx.ContainsKey(rigidName)) rigidName += "_";
+            rigidJoint = deformToBone.Count;
+            deformToBone.Add(bones.Count);
+            deformJointByBone.Add(bones.Count, rigidJoint);
+            bones.Add(new ViewportBone
+            {
+                Name = rigidName, ParentIndex = -1,
+                LocalBind = Matrix4x4.Identity, InverseGlobalBind = Matrix4x4.Identity,
+            });
+        }
         for (var m = 0; m < meshes.Count; m++)
         {
             var mm = meshes[m];
@@ -237,7 +254,12 @@ public sealed class ViewportMesh
                 sourceDeformToMerged[j] = mergedJoint;
             }
 
-            foreach (var w in mm.Weights)
+            if (mm.DeformToBone.Length == 0 && rigidJoint >= 0)
+            {
+                for (var vertex = 0; vertex < mm.VertexCount; vertex++)
+                    weights.Add([(rigidJoint, 1f)]);
+            }
+            else foreach (var w in mm.Weights)
             {
                 var remapped = new (int, float)[w.Length];
                 for (var k = 0; k < w.Length; k++)
@@ -301,7 +323,98 @@ public sealed class ViewportMesh
     }
 
     /// <summary>
-    /// Determines whether parts can safely be collapsed onto one armature.  Bone names alone
+    /// Validates an export union, which may contain different bone subsets. Shared bones
+    /// must still agree on their bind space and parent; a truncated root may acquire its
+    /// missing parent only when both sources place it at the same global rest transform.
+    /// Keep this separate from the identical-skeleton check used for preview pose sharing.
+    /// </summary>
+    private static bool TryGetSkeletonUnionCompatibility(IReadOnlyList<ViewportMesh> meshes, out string reason)
+    {
+        reason = string.Empty;
+        var shared = new Dictionary<string, (Matrix4x4 InverseBind, Matrix4x4 GlobalBind,
+            string? Parent, Matrix4x4 LocalBind)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (mesh, meshIndex) in meshes.Select((mesh, index) => (mesh, index)))
+        {
+            UniqueBonesByName(mesh, out var duplicate);
+            if (duplicate != null)
+            {
+                reason = $"第 {meshIndex + 1} 个分件存在重复骨骼名：{duplicate}";
+                return false;
+            }
+
+            var globals = new Matrix4x4[mesh.Bones.Length];
+            var states = new byte[mesh.Bones.Length];
+            bool ResolveGlobal(int index)
+            {
+                if (states[index] == 2) return true;
+                if (states[index] == 1) return false;
+                states[index] = 1;
+                var bone = mesh.Bones[index];
+                var parent = bone.ParentIndex;
+                if (parent < -1 || parent >= mesh.Bones.Length) return false;
+                if (parent >= 0 && !ResolveGlobal(parent)) return false;
+                globals[index] = parent < 0 ? bone.LocalBind : bone.LocalBind * globals[parent];
+                states[index] = 2;
+                return true;
+            }
+
+            for (var index = 0; index < mesh.Bones.Length; index++)
+            {
+                var bone = mesh.Bones[index];
+                if (!ResolveGlobal(index))
+                {
+                    reason = $"第 {meshIndex + 1} 个分件的 {bone.Name} 骨骼层级无效";
+                    return false;
+                }
+                var parent = bone.ParentIndex >= 0 ? mesh.Bones[bone.ParentIndex].Name : null;
+                if (!shared.TryGetValue(bone.Name, out var previous))
+                {
+                    shared.Add(bone.Name, (bone.InverseGlobalBind, globals[index], parent, bone.LocalBind));
+                    continue;
+                }
+
+                if (previous.Parent != null && parent != null &&
+                    !string.Equals(previous.Parent, parent, StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = $"第 {meshIndex + 1} 个分件的 {bone.Name} 父级不同";
+                    return false;
+                }
+                if (!NearlyEqual(previous.InverseBind, bone.InverseGlobalBind) ||
+                    !NearlyEqual(previous.GlobalBind, globals[index]) ||
+                    (string.Equals(previous.Parent, parent, StringComparison.OrdinalIgnoreCase) &&
+                     !NearlyEqual(previous.LocalBind, bone.LocalBind)))
+                {
+                    reason = $"第 {meshIndex + 1} 个分件的 {bone.Name} 静止绑定矩阵不同";
+                    return false;
+                }
+                // Remember a supplied parent even when the first part exposed this bone
+                // as a root, so conflicts between the second and third parts are caught.
+                if (previous.Parent == null && parent != null)
+                    shared[bone.Name] = (previous.InverseBind, previous.GlobalBind, parent, bone.LocalBind);
+            }
+        }
+
+        // Individually valid truncated hierarchies can create a cycle when combined.
+        var unionStates = new Dictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        bool Visit(string name)
+        {
+            if (unionStates.TryGetValue(name, out var state)) return state == 2;
+            unionStates[name] = 1;
+            if (shared[name].Parent is { } parent && !Visit(parent)) return false;
+            unionStates[name] = 2;
+            return true;
+        }
+        foreach (var name in shared.Keys)
+        {
+            if (Visit(name)) continue;
+            reason = $"合并后的 {name} 骨骼层级存在循环";
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Determines whether parts have identical skeletons for preview pose sharing. Bone names alone
     /// are not sufficient: some RE Engine character parts use the same names but a different
     /// bind-space origin (for example, a waist-relative accessory alongside a ground-rooted
     /// body).  Rebinding such a part by name makes it explode as soon as animation is applied.

@@ -10,7 +10,14 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 > 请在 Releases 页面选择所需版本的 Windows x64 构建包，解压后运行唯一的 `ReExtractor-vX.Y.Z.exe`。首次启动会自动释放必要的贴图解码库，并在程序旁生成设置、日志、路径 list 和导出目录。
 
-当前版本：`v1.3.11`
+当前版本：`v1.3.12`
+
+## v1.3.12 更新
+
+- 修复 v1.3.11 对骨骼数量不同、绑定兼容的角色分件误报“这些模型不能共享一副骨架”，导致合并导出失败的问题。
+- 合并导出允许合法的骨架子集和额外骨，保留原有权重映射；实际绑定冲突和层级循环仍会被拒绝。
+- 恢复静态模型合并，保留 NPC 预览共享姿态的严格检查。
+- 18 项合成回归测试通过；春丽 `esf004/001` 的头脸、身体服装和头发已完成 GUI 合并预览，用户手动导出后反馈外观正常。详见 [版本说明](docs/RELEASE_NOTES_v1.3.12.md)。
 
 ## v1.3.11 更新
 
@@ -188,7 +195,7 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 ```text
 ReExtractor/
-├─ ReExtractor-v1.3.11.exe # 发布包中唯一的文件
+├─ ReExtractor-v1.3.12.exe # 发布包中唯一的文件
 ├─ libGDeflate.dll         # 首次启动后自动释放的贴图解码库
 ├─ output/                  # 默认导出目录
 └─ ReExtractor-tools/
