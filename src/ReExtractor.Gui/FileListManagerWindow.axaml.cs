@@ -38,6 +38,8 @@ public partial class FileListManagerWindow : Window
         Opened += async (_, _) =>
         {
             RefreshLocal();
+            _manifest = _service.LoadCachedManifest();
+            RefreshRemoteRows();
             await FetchRemoteAsync();
         };
     }
@@ -66,12 +68,11 @@ public partial class FileListManagerWindow : Window
         UpdateRemoteSelection();
     }
 
-    private static string GetRemoteStatus(RemoteFileListInfo info,
+    private string GetRemoteStatus(RemoteFileListInfo info,
         System.Collections.Generic.IReadOnlyDictionary<string, ManagedFileList> local)
     {
-        if (!local.TryGetValue(info.Identifier, out var installed)) return "可下载";
-        if (installed.Source == "本地导入") return "本地同名";
-        return info.UpdateTime > installed.UpdateTime ? "可更新" : "已是最新";
+        local.TryGetValue(info.Identifier, out var installed);
+        return _service.GetRemoteStatus(info, installed);
     }
 
     private async Task FetchRemoteAsync()
@@ -82,7 +83,7 @@ public partial class FileListManagerWindow : Window
         {
             _manifest = await _service.FetchManifestAsync();
             RefreshRemoteRows();
-            ManagerStatusText.Text = "在线列表已更新";
+            ManagerStatusText.Text = _service.CatalogStatus;
         }
         catch (Exception ex)
         {
@@ -103,12 +104,12 @@ public partial class FileListManagerWindow : Window
             return;
         }
         RemoteDescriptionText.Text = row.Info.SourceName == "Ekey/REE.PAK.Tool"
-            ? "来源：Ekey/REE.PAK.Tool · PC 精选列表"
+            ? "来源：Ekey/REE.PAK.Tool · Projects 在线目录"
             : string.IsNullOrWhiteSpace(row.Info.Description)
                 ? $"来源：{row.Info.SourceName}"
                 : row.Info.Description;
         DownloadButton.Content = row.Status == "可更新" ? "更新选中列表" : "下载选中列表";
-        DownloadButton.IsEnabled = row.Status is "可下载" or "可更新";
+        DownloadButton.IsEnabled = row.Status is "新增" or "可下载" or "可更新";
     }
 
     private async void OnImportClicked(object? sender, RoutedEventArgs e)

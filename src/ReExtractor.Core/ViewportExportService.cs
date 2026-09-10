@@ -29,7 +29,7 @@ public sealed class ViewportExportService
     public string ConvertToAnimatedGlb(ViewportMesh mesh, IReadOnlySet<int> visibleGroups, AnimationClip clip, string outputPath)
     {
         var (scene, nodes) = BuildScene(mesh, visibleGroups);
-        ApplyAnimation(nodes, clip);
+        ApplyAnimation(nodes, clip, mesh.AnimationBoneAliases);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         scene.ToGltf2().SaveGLB(outputPath);
         return outputPath;
@@ -44,7 +44,7 @@ public sealed class ViewportExportService
         {
             // One MeshBuilder with multiple material primitives becomes ONE mesh object in
             // Blender/FBX/UE. A builder per material would produce scattered mesh objects.
-            var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexJoints4>("合并模型");
+            var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexJoints8>("合并模型");
             var hasGeometry = false;
             for (var slot = -1; slot < Math.Max(1, mesh.Textures.Length); slot++)
             {
@@ -107,7 +107,7 @@ public sealed class ViewportExportService
         if (models.Count == 1) return (models[0].Mesh, models[0].VisibleGroups);
 
         var visibleMeshes = models.Select(model => VisibleCopy(model.Mesh, model.VisibleGroups)).ToArray();
-        var merged = ViewportMesh.Merge(visibleMeshes);
+        var merged = PreviewSkeletonExport.Merge(visibleMeshes);
         return (merged, merged.Groups.Select(group => group.Key).ToHashSet());
     }
 
@@ -190,14 +190,22 @@ public sealed class ViewportExportService
         return new SkeletonBuild(joints, nodes);
     }
 
-    private static void ApplyAnimation(NodeBuilder[] nodes, AnimationClip clip)
+    private static void ApplyAnimation(NodeBuilder[] nodes, AnimationClip clip, IReadOnlyDictionary<string, string> aliases)
     {
         var animName = string.IsNullOrWhiteSpace(clip.Name) ? "mot" : clip.Name;
         for (var i = 0; i < nodes.Length; i++)
         {
             var node = nodes[i];
-            if (!clip.NamedTracks.TryGetValue(node.Name, out var track) &&
-                !clip.Tracks.TryGetValue(i, out track))
+            var name = aliases.TryGetValue(node.Name, out var alias) ? alias : node.Name;
+            if (name.Length == 0)
+            {
+                node.WithLocalRotation(animName, new Dictionary<float, Quaternion> { [0] = Quaternion.Identity, [Math.Max(clip.Duration, 0.001f)] = Quaternion.Identity });
+                node.WithLocalTranslation(animName, new Dictionary<float, Vector3> { [0] = Vector3.Zero, [Math.Max(clip.Duration, 0.001f)] = Vector3.Zero });
+                node.WithLocalScale(animName, new Dictionary<float, Vector3> { [0] = Vector3.One, [Math.Max(clip.Duration, 0.001f)] = Vector3.One });
+                continue;
+            }
+            if (!clip.NamedTracks.TryGetValue(name, out var track) &&
+                (clip.NamedTracks.Count > 0 || !clip.Tracks.TryGetValue(i, out track)))
                 continue;
 
             if (track.RotTimes is { Length: > 0 } rotTimes &&
@@ -239,14 +247,14 @@ public sealed class ViewportExportService
             Vector3.Normalize(Vector3.TransformNormal(normal, ReToUeWorld))), new VertexTexture1(uv));
     }
 
-    private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexJoints4> SkinnedVertex(ViewportMesh mesh, int index)
+    private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexJoints8> SkinnedVertex(ViewportMesh mesh, int index)
     {
         var normal = index < mesh.Normals.Length ? mesh.Normals[index] : Vector3.UnitZ;
         if (normal.LengthSquared() < 1e-6f) normal = Vector3.UnitZ;
         var uv = index < mesh.Uvs.Length ? mesh.Uvs[index] : Vector2.Zero;
         var weights = index < mesh.Weights.Length ? mesh.Weights[index] : [];
         var top = weights.Where(weight => weight.Item2 > 0 && weight.Item1 >= 0 && weight.Item1 < mesh.DeformToBone.Length)
-            .OrderByDescending(weight => weight.Item2).Take(4).ToArray();
+            .OrderByDescending(weight => weight.Item2).Take(8).ToArray();
         if (top.Length == 0) top = [(0, 1f)];
         var sum = top.Sum(weight => weight.Item2);
         // The glTF joint table now follows the full bone array. RE vertex weights still
@@ -254,7 +262,7 @@ public sealed class ViewportExportService
         var bindings = top.Select(weight =>
             (mesh.DeformToBone[weight.Item1], weight.Item2 / sum)).ToArray();
         return new(new VertexPositionNormal(mesh.Vertices[index], Vector3.Normalize(normal)),
-            new VertexTexture1(uv), new VertexJoints4(bindings));
+            new VertexTexture1(uv), new VertexJoints8(bindings));
     }
 
     private static Dictionary<int, MaterialBuilder> BuildMaterials(ViewportMesh mesh)

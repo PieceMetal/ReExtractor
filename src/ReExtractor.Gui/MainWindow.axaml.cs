@@ -152,6 +152,8 @@ public partial class MainWindow : Window
     private FileTreeNode? _treeRoot;
     private string? _selectedPath;
     private string? _contextPath;
+    private IReadOnlyList<string> _contextResourcePaths = [];
+    private bool _batchModelExportRunning;
     private string? _lastMeshPath;
     private readonly List<string> _previewMeshPaths = new();
     private string? _previewScenePath;
@@ -341,6 +343,7 @@ public partial class MainWindow : Window
         var gameKey = CurrentAssemblyGameKey;
         var count = _assemblyPresetService.List(gameKey).Count;
         AssemblyPresetHint.Text = $"当前分类：{gameKey} · 已保存 {count} 个预设";
+        ToolTip.SetTip(AssemblyPresetHint, _assemblyPresetService.GetGameDirectory(gameKey));
     }
 
     private void OnAssemblyPresetSaveClicked(object? sender, RoutedEventArgs e)
@@ -374,10 +377,14 @@ public partial class MainWindow : Window
 
     private async void OnAssemblyPresetLoadClicked(object? sender, RoutedEventArgs e)
     {
+        var directory = _assemblyPresetService.GetGameDirectory(CurrentAssemblyGameKey);
+        Directory.CreateDirectory(directory);
+        var startLocation = await StorageProvider.TryGetFolderFromPathAsync(directory);
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "加载模型组装预设",
             AllowMultiple = false,
+            SuggestedStartLocation = startLocation,
             FileTypeFilter = [new FilePickerFileType("模型组装预设") { Patterns = ["*.json"] }],
         });
         if (files.Count == 0) return;
@@ -405,6 +412,17 @@ public partial class MainWindow : Window
         {
             ActionStatus.Text = "加载预设失败：" + ex.Message;
         }
+    }
+
+    private void OnAssemblyPresetFolderClicked(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var directory = _assemblyPresetService.GetGameDirectory(CurrentAssemblyGameKey);
+            Directory.CreateDirectory(directory);
+            Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
+        }
+        catch (Exception ex) { ActionStatus.Text = "打开预设目录失败：" + ex.Message; }
     }
 
     private void RefreshManagedLists(string? selectPath = null)
@@ -1367,6 +1385,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     SearchResults.SelectedItem = entry;
             }
             if (_contextPath != null) SelectPath(_contextPath);
+            // Snapshot before the control's own right-click handling can collapse selection.
+            _contextResourcePaths = SelectedResourcePaths().ToArray();
             return;
         }
 
@@ -2262,7 +2282,6 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
         var toolDir = AppPaths.ToolsDirectory;
         var targetPath = Path.Combine(toolDir, scriptName);
-        if (File.Exists(targetPath)) return targetPath;
 
         Directory.CreateDirectory(toolDir);
         var assembly = Assembly.GetExecutingAssembly();
@@ -2274,8 +2293,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
         using var input = assembly.GetManifestResourceStream(resourceName)
             ?? throw new FileNotFoundException($"无法读取内置脚本 {scriptName}");
-        using var output = File.Create(targetPath);
-        input.CopyTo(output);
+        using var buffer = new MemoryStream();
+        input.CopyTo(buffer);
+        var script = buffer.ToArray();
+        if (!File.Exists(targetPath) || !File.ReadAllBytes(targetPath).AsSpan().SequenceEqual(script))
+            File.WriteAllBytes(targetPath, script);
         return targetPath;
     }
 
@@ -2459,6 +2481,13 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     (ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups)[] models;
                     if (exportModels.Count == texturedMeshes.Length)
                     {
+                        // MOT loading can append helper bones. Use the same skeleton snapshot
+                        // as animation export while refreshing geometry/materials from the source.
+                        for (var index = 0; index < texturedMeshes.Length; index++)
+                        {
+                            texturedMeshes[index].Bones = exportModels[index].Mesh.Bones;
+                            texturedMeshes[index].DeformToBone = exportModels[index].Mesh.DeformToBone;
+                        }
                         models = texturedMeshes.Select((mesh, index) =>
                             (mesh, (IReadOnlySet<int>)exportModels[index].VisibleGroups)).ToArray();
                     }
@@ -2827,19 +2856,23 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void OnCtxAddToMerge(object? sender, RoutedEventArgs e)
     {
-        var path = PathFromSender(sender);
-        if (path == null || KindOf(path) != "mesh") return;
-        if (!_mergeQueue.Contains(path)) _mergeQueue.Add(path);
-        RefreshMergeList();
-        ActionStatus.Text = $"已加入合并队列（{_mergeQueue.Count} 个）: {path.Split('/')[^1]}";
+        AddSelectedModelsToMerge(ContextResourcePaths(sender));
     }
 
     private void OnMergeAddClicked(object? sender, RoutedEventArgs e)
     {
-        if (_selectedPath == null || KindOf(_selectedPath) != "mesh")
-        { ActionStatus.Text = "请先在左侧选中一个 .mesh 文件"; return; }
-        if (!_mergeQueue.Contains(_selectedPath)) _mergeQueue.Add(_selectedPath);
+        AddSelectedModelsToMerge(SelectedResourcePaths());
+    }
+
+    private void AddSelectedModelsToMerge(IEnumerable<string> paths)
+    {
+        var models = paths.Where(path => KindOf(path) == "mesh").Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var added = 0;
+        foreach (var path in models)
+            if (!_mergeQueue.Contains(path, StringComparer.OrdinalIgnoreCase)) { _mergeQueue.Add(path); added++; }
         RefreshMergeList();
+        ActionStatus.Text = models.Length == 0 ? "请先选择一个或多个 .mesh 模型"
+            : $"已加入 {added} 个模型，跳过 {models.Length - added} 个重复项；合并队列共 {_mergeQueue.Count} 个";
     }
 
     private void OnMergeRemoveClicked(object? sender, RoutedEventArgs e)
@@ -2884,8 +2917,48 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         else if (FileTree.SelectedItems != null)
             selected.AddRange(FileTree.SelectedItems.OfType<FileTreeNode>()
                 .Select(node => node.FilePath).Where(path => path != null).Select(path => path!));
-        if (_selectedPath != null) selected.Add(_selectedPath);
+        if (selected.Count == 0 && _selectedPath != null) selected.Add(_selectedPath);
         return selected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private IReadOnlyList<string> ContextResourcePaths(object? sender)
+    {
+        var context = PathFromSender(sender);
+        if (context != null && _contextResourcePaths.Contains(context, StringComparer.OrdinalIgnoreCase))
+            return _contextResourcePaths;
+        return context != null ? [context] : SelectedResourcePaths();
+    }
+
+    private async void OnCtxExportModels(object? sender, RoutedEventArgs e)
+    {
+        if (_pak == null || _batchModelExportRunning) return;
+        var paths = ContextResourcePaths(sender).Where(path => KindOf(path) == "mesh")
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (paths.Length == 0) { ActionStatus.Text = "请选择一个或多个 .mesh 模型"; return; }
+        _batchModelExportRunning = true;
+        int? progress = null;
+        try
+        {
+            if (!await EnsureBlenderReadyAsync()) return;
+            var pak = _pak;
+            var blender = CurrentBlenderPath;
+            var outputRoot = Path.GetFullPath(CurrentOutputDirectory);
+            progress = BeginProgress($"正在分别导出 {paths.Length} 个模型…", false, paths.Length);
+            var operation = progress.Value;
+            var result = await Task.Run(() => ModelBatchExportService.Export(pak, paths, outputRoot, _tempDir,
+                (input, output) => RunBlenderBatch("export_models_fbx.py", blender, input, output),
+                (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    UpdateCountProgress(operation, current, total, "批量导出模型"))));
+            foreach (var failure in result.Failures) AppendLog("模型批量导出失败：" + failure);
+            foreach (var output in result.OutputFiles) AppendLog("模型已单独导出：" + output);
+            ActionStatus.Text = $"批量导出完成：成功 {result.OutputFiles.Count}，失败 {result.Failures.Count} | {Path.Combine(outputRoot, "models")}";
+        }
+        catch (Exception exception) { ActionStatus.Text = "模型批量导出失败：" + exception.Message; }
+        finally
+        {
+            if (progress.HasValue) EndProgress(progress.Value);
+            _batchModelExportRunning = false;
+        }
     }
 
     private void OnCtxAddToAnimBatch(object? sender, RoutedEventArgs e)

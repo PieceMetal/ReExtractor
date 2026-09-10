@@ -122,7 +122,9 @@ public sealed class PakService
 
         for (var i = _pakFiles.Count - 1; i >= 0; i--)
         {
-            using var pak = new PakFile();
+            // A list only names entries for the UI; it must not limit hash-addressable
+            // dependencies such as streaming TEX files omitted from a game's list.
+            using var pak = new PakFile { IncludeUnknowns = true };
             pak.ReadContents(_pakFiles[i], _knownPaths);
             foreach (var entry in pak.Entries)
             {
@@ -245,7 +247,7 @@ public sealed class PakService
     private MemoryStream? TryReadPakFile(int pakIndex, ulong hash)
     {
         if ((uint)pakIndex >= (uint)_pakFiles.Count) return null;
-        using var pak = new PakFile { filepath = _pakFiles[pakIndex] };
+        using var pak = new PakFile { filepath = _pakFiles[pakIndex], IncludeUnknowns = true };
         pak.ReadContents(_pakFiles[pakIndex], _knownPaths);
         var entry = pak.Entries.FirstOrDefault(candidate => candidate.CombinedHash == hash);
         if (entry == null) return null;

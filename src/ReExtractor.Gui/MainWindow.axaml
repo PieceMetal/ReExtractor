@@ -1,9 +1,9 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ReExtractor.Gui"
         x:Class="ReExtractor.Gui.MainWindow"
         Icon="/Assets/AppIcon.ico"
-        Title="ReExtractor v1.3.12 — RE 引擎资源工作台"
+        Title="ReExtractor v1.3.13 — RE 引擎资源工作台"
         Width="1440" Height="860" WindowState="Maximized"
         KeyDown="OnMainWindowKeyDown"
         Background="#16191f">
@@ -12,7 +12,7 @@
     <Border x:Name="TitleStrip" DockPanel.Dock="Top" Margin="-12,-12,-12,0" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,0,0,1" Padding="14,8">
       <Grid ColumnDefinitions="Auto,*">
-        <TextBlock Grid.Column="0" Text="◆  RE Engine 资源工具 v1.3.12" Foreground="#7fc3ff"
+        <TextBlock Grid.Column="0" Text="◆  RE Engine 资源工具 v1.3.13" Foreground="#7fc3ff"
                    FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
       </Grid>
     </Border>
@@ -113,7 +113,8 @@
             </TreeView.Styles>
             <TreeView.ContextFlyout>
               <MenuFlyout>
-                <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
+                <MenuItem Header="添加选中模型到合并器" Click="OnCtxAddToMerge"/>
+                <MenuItem Header="批量导出选中模型 FBX" Click="OnCtxExportModels"/>
                 <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
                 <Separator/>
@@ -135,7 +136,8 @@
               <MenuFlyout>
                 <MenuItem Header="在目录树中定位" Click="OnCtxLocateInTree"/>
                 <Separator/>
-                <MenuItem Header="添加到合并器" Click="OnCtxAddToMerge"/>
+                <MenuItem Header="添加选中模型到合并器" Click="OnCtxAddToMerge"/>
+                <MenuItem Header="批量导出选中模型 FBX" Click="OnCtxExportModels"/>
                 <MenuItem Header="添加到动画导出列表" Click="OnCtxAddToAnimBatch"/>
                 <MenuItem Header="叠加到当前预览" Click="OnCtxAddModel"/>
                 <Separator/>
@@ -416,6 +418,8 @@
                     <Button Grid.Column="2" Content="加载预设"
                             Click="OnAssemblyPresetLoadClicked"/>
                   </Grid>
+                  <Button Content="打开预设目录" Click="OnAssemblyPresetFolderClicked"
+                          Margin="0,6,0,0" HorizontalAlignment="Stretch"/>
                   <TextBlock x:Name="AssemblyPresetHint"
                              Text="当前分类：未识别"
                              Foreground="#737b87" FontSize="10"
@@ -451,7 +455,7 @@
             <Border Background="#292631" BorderBrush="#765c91" BorderThickness="1" CornerRadius="6" Padding="10">
               <StackPanel>
                 <TextBlock Text="动画导出" Foreground="#d3a9ff" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <TextBlock Text="每个动画单独导出，不包含模型。"
+                <TextBlock Text="每个动画单独导出，附带绑定参考网格。"
                            TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,8"/>
                 <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto" Margin="0,0,0,7">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="范围" VerticalAlignment="Center" Margin="0,0,8,6"/>

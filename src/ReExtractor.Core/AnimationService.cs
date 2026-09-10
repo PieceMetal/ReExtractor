@@ -192,7 +192,11 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
     {
         var hashToBone = new Dictionary<uint, (int Index, string Name)>(meshBoneNames.Count);
         for (var i = 0; i < meshBoneNames.Count; i++)
-            hashToBone.TryAdd(MurMur3HashUtils.GetHash(meshBoneNames[i]), (i, meshBoneNames[i]));
+        {
+            var name = skeletonMesh.AnimationBoneAliases.TryGetValue(meshBoneNames[i], out var alias)
+                ? alias : meshBoneNames[i];
+            if (name.Length > 0) hashToBone.TryAdd(MurMur3HashUtils.GetHash(name), (i, name));
+        }
 
         var tracks = new Dictionary<int, BoneTrack>();
         var namedTracks = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);

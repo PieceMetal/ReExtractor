@@ -13,6 +13,8 @@ namespace ReExtractor.Core;
 /// <summary>Unified geometry + skeleton for real-time viewport rendering (CPU side).</summary>
 public sealed class ViewportMesh
 {
+    // Export-only aliases: empty means a passive skin joint, never an animation target.
+    public Dictionary<string, string> AnimationBoneAliases = new(StringComparer.OrdinalIgnoreCase);
     public required Vector3[] Vertices;              // bind pose
     public required Vector3[] Normals;               // bind pose (dequantized)
     public required Vector2[] Uvs;                   // TEXCOORD_0
@@ -328,7 +330,7 @@ public sealed class ViewportMesh
     /// missing parent only when both sources place it at the same global rest transform.
     /// Keep this separate from the identical-skeleton check used for preview pose sharing.
     /// </summary>
-    private static bool TryGetSkeletonUnionCompatibility(IReadOnlyList<ViewportMesh> meshes, out string reason)
+    internal static bool TryGetSkeletonUnionCompatibility(IReadOnlyList<ViewportMesh> meshes, out string reason)
     {
         reason = string.Empty;
         var shared = new Dictionary<string, (Matrix4x4 InverseBind, Matrix4x4 GlobalBind,
@@ -597,8 +599,7 @@ public static class ViewportDataLoader
             if (mdfStream == null) continue;
             try
             {
-                var mdf = new MdfFile(new FileHandler(mdfStream, mdfPath));
-                if (!mdf.Read()) continue;
+                var mdf = MdfService.Read(mdfStream, mdfPath);
                 return mdf.Materials.SelectMany(material => material.Textures)
                     .Select(texture => texture.texPath)
                     .Where(path => !string.IsNullOrWhiteSpace(path) && !IsNullTexture(path))
@@ -843,8 +844,7 @@ public static class ViewportDataLoader
         MdfFile mdf;
         try
         {
-            mdf = new MdfFile(new FileHandler(mdfStream, mdfPath));
-            if (!mdf.Read()) return result;
+            mdf = MdfService.Read(mdfStream, mdfPath);
         }
         catch { return result; }
 
@@ -1356,7 +1356,8 @@ public static class ViewportDataLoader
                type.Equals("ALBD", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static readonly string[] MdfNameSuffixCandidates = ["", "_v00"];
+    // Some Onimusha event-only parts (ch001_00_02) have no unsuffixed MDF.
+    private static readonly string[] MdfNameSuffixCandidates = ["", "_v00", "_event_00"];
 
     private static readonly string[] MdfVersionCandidates =
         [".mdf2.51", ".mdf2.50", ".mdf2.49", ".mdf2.45", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",

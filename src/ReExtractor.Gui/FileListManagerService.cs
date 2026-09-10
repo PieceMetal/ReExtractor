@@ -50,6 +50,36 @@ public sealed class FileListManifest
 
 public sealed class FileListManagerService
 {
+    public string CatalogStatus { get; private set; } = "";
+    public FileListManifest LoadCachedManifest()
+    {
+        try
+        {
+            var cached = JsonSerializer.Deserialize<FileListManifest>(File.ReadAllText(Path.Combine(LibraryDirectory, "catalog.json")));
+            if (cached != null) return cached;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
+        var assembly = typeof(FileListManagerService).Assembly.GetName().Name;
+        using var stream = AssetLoader.Open(new Uri($"avares://{assembly}/Assets/ekey_filelist_manifest.json"));
+        return JsonSerializer.Deserialize<FileListManifest>(stream) ?? new();
+    }
+
+    public string GetRemoteStatus(RemoteFileListInfo info, ManagedFileList? local)
+    {
+        if (local == null) return "新增";
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(info.GitBlobSha))
+            {
+                var data = File.ReadAllBytes(local.FilePath);
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+                hash.AppendData(Encoding.ASCII.GetBytes($"blob {data.Length}\0")); hash.AppendData(data);
+                return Convert.ToHexString(hash.GetHashAndReset()).Equals(info.GitBlobSha, StringComparison.OrdinalIgnoreCase) ? "已是最新" : "可更新";
+            }
+        }
+        catch (IOException) { return "可更新"; }
+        return info.UpdateTime > local.UpdateTime ? "可更新" : "已安装";
+    }
     private static readonly string[] ManifestUrls =
     [
         "https://raw.githubusercontent.com/eigeen/ree-pak-gui-update/refs/heads/main/filelist_manifest.json",
@@ -101,6 +131,8 @@ public sealed class FileListManagerService
 
     public async Task<FileListManifest> FetchManifestAsync(CancellationToken cancellationToken = default)
     {
+        var cached = LoadCachedManifest();
+        var ekeyTask = FetchEkeyAsync(cancellationToken);
         FileListManifest? onlineManifest = null;
         Exception? lastError = null;
         foreach (var url in ManifestUrls)
@@ -115,7 +147,7 @@ public sealed class FileListManagerService
                 foreach (var item in onlineManifest.Files) item.SourceName = "Eigeen 更新源";
                 break;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { lastError = ex; }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested) { lastError = ex; }
         }
 
         FileListManifest curatedManifest;
@@ -134,17 +166,58 @@ public sealed class FileListManagerService
         if (onlineManifest == null && curatedManifest.Files.Length == 0)
             throw new HttpRequestException("所有在线列表源均连接失败", lastError);
 
+        var ekey = await ekeyTask;
         var merged = curatedManifest.Files
+            .Concat(cached.Files)
             .Concat(onlineManifest?.Files ?? [])
+            .Concat(ekey)
             .GroupBy(item => item.Identifier, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.Last())
             .OrderBy(item => item.Identifier, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return new FileListManifest
+        var result = new FileListManifest
         {
-            BaseUrls = onlineManifest?.BaseUrls ?? [],
+            BaseUrls = onlineManifest?.BaseUrls ?? cached.BaseUrls,
             Files = merged,
         };
+        CatalogStatus = ekey.Length > 0 ? "在线目录已更新" : "Ekey 目录暂时不可用，已保留缓存及内置列表";
+        try
+        {
+            var path = Path.Combine(LibraryDirectory, "catalog.json");
+            await File.WriteAllTextAsync(path + ".tmp", JsonSerializer.Serialize(result), cancellationToken);
+            File.Move(path + ".tmp", path, true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { CatalogStatus += "（缓存写入失败）"; }
+        return result;
+    }
+
+    private static async Task<RemoteFileListInfo[]> FetchEkeyAsync(CancellationToken token)
+    {
+        try
+        {
+            using var headRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Ekey/REE.PAK.Tool/git/ref/heads/main");
+            headRequest.Headers.UserAgent.ParseAdd("ReExtractor/1.3.13");
+            using var headResponse = await Http.SendAsync(headRequest, token); headResponse.EnsureSuccessStatusCode();
+            using var head = JsonDocument.Parse(await headResponse.Content.ReadAsStringAsync(token));
+            var revision = head.RootElement.GetProperty("object").GetProperty("sha").GetString();
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/Ekey/REE.PAK.Tool/git/trees/{revision}?recursive=1");
+            request.Headers.UserAgent.ParseAdd("ReExtractor/1.3.13");
+            using var response = await Http.SendAsync(request, token); response.EnsureSuccessStatusCode();
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+            if (doc.RootElement.TryGetProperty("truncated", out var truncated) && truncated.GetBoolean())
+                throw new InvalidDataException("GitHub 目录不完整");
+            return doc.RootElement.GetProperty("tree").EnumerateArray()
+                .Where(e => e.GetProperty("type").GetString() == "blob")
+                .Where(e => e.GetProperty("path").GetString() is string p && p.StartsWith("Projects/", StringComparison.Ordinal) && p.EndsWith(".list", StringComparison.OrdinalIgnoreCase))
+                .Select(e => new RemoteFileListInfo {
+                    FileName = Path.GetFileName(e.GetProperty("path").GetString()!),
+                    GitBlobSha = e.GetProperty("sha").GetString()!, Size = e.GetProperty("size").GetInt64(),
+                    SourceName = "Ekey/REE.PAK.Tool",
+                    DirectUrl = $"https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/{revision}/" + string.Join("/", e.GetProperty("path").GetString()!.Split('/').Select(Uri.EscapeDataString)),
+                    Tags = ["Ekey", "REE.PAK.Tool"],
+                }).ToArray();
+        }
+        catch (Exception ex) when (!token.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException or JsonException or InvalidDataException) { return []; }
     }
 
     public async Task<string> DownloadAsync(FileListManifest manifest, RemoteFileListInfo info,

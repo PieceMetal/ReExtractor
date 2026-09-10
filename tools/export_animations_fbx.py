@@ -124,6 +124,8 @@ for index, source in enumerate(inputs, start=1):
     bpy.ops.object.select_all(action="DESELECT")
     for armature in armatures:
         armature.select_set(True)
+    for mesh in (obj for obj in bpy.data.objects if obj.type == "MESH"):
+        mesh.select_set(True)
     bpy.context.view_layer.objects.active = armatures[0]
 
     output_path = os.path.join(
