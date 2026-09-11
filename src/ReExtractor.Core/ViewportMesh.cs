@@ -848,6 +848,13 @@ public static class ViewportDataLoader
         }
         catch { return result; }
 
+        var isSf6Character = Sf6MaterialColors.IsCharacter(meshPath);
+        if (isSf6Character)
+        {
+            try { Sf6MaterialColors.ReadDefaultPalette(meshPath, mdf, openResource); }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine($"SF6 palette {meshPath}: {ex.Message}"); }
+        }
+
         // material name -> index (mesh-side order)
         var nameToIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < mesh.MaterialNames.Count; i++)
@@ -865,7 +872,15 @@ public static class ViewportDataLoader
             // produces the characteristic repeated-face corruption seen on ch001_00_10.
             var atlasQuadrant = false;
             string? albedoPath = GetMaterialBaseTexturePath(mat);
-            if (!string.IsNullOrEmpty(albedoPath) && IsNullTexture(albedoPath))
+            // SF6 cloth threads use an authored white base and a constant color-region mask.
+            var solidSf6Color = isSf6Character &&
+                albedoPath?.Contains("NullWhite", StringComparison.OrdinalIgnoreCase) == true &&
+                mat.Textures.Any(t => t.texType.Equals("CustomizeColor_Mask", StringComparison.OrdinalIgnoreCase) &&
+                    t.texPath.Contains("Null_RGBA_", StringComparison.OrdinalIgnoreCase));
+            var solidSf6Hair = isSf6Character && IsHairCardMaterial(mat) &&
+                albedoPath?.Contains("NullWhite", StringComparison.OrdinalIgnoreCase) == true &&
+                mat.Textures.Any(t => t.texType.Equals("BaseAnisoShiftMap", StringComparison.OrdinalIgnoreCase));
+            if (!solidSf6Hair && !solidSf6Color && !string.IsNullOrEmpty(albedoPath) && IsNullTexture(albedoPath))
                 albedoPath = FindFamilyBaseTexturePath(mdf.Materials, mat);
             if (string.IsNullOrEmpty(albedoPath) && mat.Name.Contains("skin", StringComparison.OrdinalIgnoreCase))
             {
@@ -894,7 +909,7 @@ public static class ViewportDataLoader
             }
             else if (IsNullTexture(albedoPath))
             {
-                if (!mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!solidSf6Hair && !solidSf6Color && !mat.Name.Contains("eyelash", StringComparison.OrdinalIgnoreCase)) continue;
                 fallbackTexture = true;
             }
 
@@ -922,7 +937,19 @@ public static class ViewportDataLoader
 
                 var isHairCard = IsHairCardMaterial(mat);
                 ViewportTexture texture;
-                if (fallbackTexture)
+                if (solidSf6Hair)
+                {
+                    // NullWhite is authored here, not a missing sibling albedo.
+                    // Keep ATOS resolution so the separate beard coverage is not collapsed.
+                    var coverage = mat.Textures.FirstOrDefault(t =>
+                        t.texType.Equals("AlphaTranslucentOcclusionSSSMap", StringComparison.OrdinalIgnoreCase));
+                    if (coverage == null) continue;
+                    using var coverageStream = OpenNormalized(openResource, coverage.texPath, meshPath);
+                    if (coverageStream == null) continue;
+                    texture = DecodeTexture(coverageStream, coverage.texPath, packedChannels: true);
+                    Array.Fill(texture.Pixels, 0xFFFFFFFFu);
+                }
+                else if (fallbackTexture)
                 {
                     texture = CreateSolidTexture(baseColor, mat.Name);
                 }
@@ -933,7 +960,7 @@ public static class ViewportDataLoader
                     {
                         using var texStream = OpenNormalized(openResource, albedoPath!, meshPath);
                         if (texStream == null) continue;
-                        sourceTexture = DecodeTexture(texStream, albedoPath!, atlasQuadrant);
+                        sourceTexture = DecodeTexture(texStream, albedoPath!, atlasQuadrant, packedChannels: isSf6Character);
                         decodedBaseTextures[cacheKey] = sourceTexture;
                     }
                     texture = CloneTexture(sourceTexture, mat.Name);
@@ -947,7 +974,10 @@ public static class ViewportDataLoader
                     ApplyHairCardTint(texture, baseColor);
                 else
                     ApplyBaseColor(texture, baseColor);
-                ApplyCustomizeColorMasks(texture, mat, openResource, meshPath);
+                if (isSf6Character)
+                    Sf6MaterialColors.Apply(texture, mat, path => OpenNormalized(openResource, path, meshPath));
+                else
+                    ApplyCustomizeColorMasks(texture, mat, openResource, meshPath);
                 var eyeColor = mat.Parameters.FirstOrDefault(parameter =>
                         parameter.paramName.Equals("Eye_ColorChange", StringComparison.OrdinalIgnoreCase))?.parameter
                     ?? mat.Parameters.FirstOrDefault(parameter =>
@@ -978,6 +1008,15 @@ public static class ViewportDataLoader
                 var alphaHeader = mat.Textures.FirstOrDefault(candidate =>
                     candidate.texType.Equals("AlphaMap", StringComparison.OrdinalIgnoreCase) &&
                     !IsNullTexture(candidate.texPath));
+                // SF6 anisotropic hair stores coverage in ATOS.R; ALBD.A is
+                // the anisotropic shift, so treating it as opacity exposes grey cards.
+                // Keep this scoped to SF6: other games use different ATOS semantics.
+                if (alphaHeader == null && isHairCard &&
+                    meshPath.Replace('\\', '/').Contains("/product/model/esf/", StringComparison.OrdinalIgnoreCase) &&
+                    mat.Textures.Any(candidate => candidate.texType.Equals("BaseAnisoShiftMap", StringComparison.OrdinalIgnoreCase)))
+                    alphaHeader = mat.Textures.FirstOrDefault(candidate =>
+                        candidate.texType.Equals("AlphaTranslucentOcclusionSSSMap", StringComparison.OrdinalIgnoreCase) &&
+                        !IsNullTexture(candidate.texPath));
                 if (alphaHeader != null)
                 {
                     using var alphaStream = OpenNormalized(openResource, alphaHeader.texPath, meshPath);
@@ -988,6 +1027,15 @@ public static class ViewportDataLoader
                         ApplyAlphaMap(texture, alphaStream, alphaHeader.texPath, alphaAdjust);
                         alphaCutout = true;
                     }
+                }
+                // Separate head/hair MDFs reuse material and albedo names with different
+                // CMD colors. Merge deduplicates by texture name, so identify baked SF6
+                // variants by content as well; otherwise black lashes replace blonde hair.
+                if (isSf6Character)
+                {
+                    var digest = System.Security.Cryptography.SHA256.HashData(
+                        System.Runtime.InteropServices.MemoryMarshal.AsBytes(texture.Pixels.AsSpan()));
+                    texture.Name += $"_{texture.Width}x{texture.Height}_{Convert.ToHexString(digest.AsSpan(0, 8))}";
                 }
                 // Decode and material customization may each alter the pixels. Build the
                 // GPU mip chain once from the final result, not after every sub-step.
@@ -1286,7 +1334,8 @@ public static class ViewportDataLoader
     {
         using var alpha = new TexService().DecodeToImage(alphaStream, alphaPath);
         if (alpha.Width != texture.Width || alpha.Height != texture.Height)
-            alpha.Mutate(operation => operation.Resize(texture.Width, texture.Height));
+            // Coverage is in R; A is packed data, not transparency for this resize.
+            alpha.Mutate(operation => operation.Resize(new ResizeOptions { Size = new Size(texture.Width, texture.Height), PremultiplyAlpha = false }));
         adjust = Math.Clamp(adjust, 0.01f, 8f);
         alpha.ProcessPixelRows(accessor =>
         {
@@ -1491,7 +1540,7 @@ public static class ViewportDataLoader
         return texture;
     }
 
-    private static ViewportTexture DecodeTexture(Stream texStream, string texPath, bool cropTopLeftQuadrant = false)
+    private static ViewportTexture DecodeTexture(Stream texStream, string texPath, bool cropTopLeftQuadrant = false, bool packedChannels = false)
     {
         using var img = new TexService().DecodeToImage(texStream, texPath);
         if (cropTopLeftQuadrant && img.Width >= 2 && img.Height >= 2)
@@ -1499,13 +1548,13 @@ public static class ViewportDataLoader
         var w = img.Width;
         var h = img.Height;
 
-        // downscale (nearest) to keep sampling fast
+        // Downscale to keep sampling fast. Packed material alpha must not erase RGB.
         if (w > MaxTextureSize || h > MaxTextureSize)
         {
             var scale = MathF.Max(w / (float)MaxTextureSize, h / (float)MaxTextureSize);
             w = Math.Max(1, (int)(w / scale));
             h = Math.Max(1, (int)(h / scale));
-            img.Mutate(x => x.Resize(w, h));
+            img.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(w, h), PremultiplyAlpha = !packedChannels }));
         }
 
         var pixels = new uint[w * h];
@@ -1606,6 +1655,11 @@ public static class ViewportDataLoader
            || name.Contains("eyewet", StringComparison.OrdinalIgnoreCase)
            || name.Contains("eye_shadow", StringComparison.OrdinalIgnoreCase)
            || name.Contains("human_tear", StringComparison.OrdinalIgnoreCase)
+           // SF6 Character_EyeTear is a translucent wet-line overlay (alpha 0.14),
+           // not an opaque albedo surface. Preserve it in source data but omit it
+           // from the generic viewport/export just like the refractive eye shells.
+           || name.StartsWith("esf_Tear", StringComparison.OrdinalIgnoreCase)
+           || name.StartsWith("esf_EyeTear", StringComparison.OrdinalIgnoreCase)
            // MHS3 names its refractive eye shells chXX_..._L_lens/R_lens.
            // They have only AlphaMap, so a generic preview turns them into opaque
            // grey discs over the properly textured pupil and sclera.
