@@ -50,7 +50,8 @@ public static class ModelBatchExportService
                 outputs.Add(output);
                 // Preserve every MDF map beside batch results too, including packed
                 // normal/mask maps that cannot be represented by FBX materials.
-                var references = ViewportDataLoader.ListReferencedTexturePaths(path, Open, materialResolver);
+                var references = ViewportDataLoader.ListReferencedTexturePaths(path, Open, materialResolver,
+                    message => failures.Add($"{path} 关联贴图: {message}"));
                 var textures = TextureExportService.ExportTextureFiles(pak, references, outputRoot);
                 failures.AddRange(textures.failures.Select(failure => $"{path} 关联贴图: {failure}"));
             }

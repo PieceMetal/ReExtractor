@@ -87,6 +87,19 @@ var folderPak = new PakService();
 folderPak.AddFolder(folderRoot);
 Stream? OpenFolder(string path) { try { return folderPak.ReadFile(path); } catch (FileNotFoundException) { return null; } }
 Check(folderPak.CreateMaterialResolver().Resolve(modelPath, ["body"], OpenFolder).SelectedPath!.EndsWith("_folder.mdf2.50"), "extracted folder candidates discovered without a list file");
+var reportRoot = Path.Combine(Path.GetTempPath(), "ReExtractor-TextureReports-" + Guid.NewGuid().ToString("N"));
+var emptyResult = TextureExportService.ExportTextureFiles(new PakService(), [], reportRoot);
+Check(emptyResult.exported == 0 && Directory.GetFiles(Path.Combine(reportRoot, "textures"), "*.log").Length == 1,
+    "zero texture export still creates an explanatory log");
+var failedResult = TextureExportService.ExportTextureFiles(new PakService(), ["natives/stm/missing.tex.1"], reportRoot);
+Check(failedResult.exported == 0 && failedResult.failures.Count == 1 &&
+    Directory.GetFiles(Path.Combine(reportRoot, "textures"), "*.log").Any(p => File.ReadAllText(p).Contains("missing.tex.1")),
+    "all failed texture exports retain the failed path in a report");
+resources.Clear();
+resources[stem + "_b.mdf2.50"] = Material("missing-albedo.tex");
+var missingReferences = new List<string>();
+ViewportDataLoader.ListReferencedTexturePaths(new MaterialResolver(resources.Keys).Resolve(modelPath, ["body"], Read), Read, missingReferences.Add);
+Check(missingReferences.Count == 2, "unresolved MDF texture paths are reported instead of silently dropped");
 
 if (args.Length >= 2)
 {

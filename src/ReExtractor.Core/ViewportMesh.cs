@@ -594,13 +594,15 @@ public static class ViewportDataLoader
 
     /// <summary>Export references from the same validated MDF used by preview.</summary>
     public static IReadOnlyList<string> ListReferencedTexturePaths(
-        string meshPath, Func<string, Stream?> openResource, MaterialResolver? materialResolver = null)
+        string meshPath, Func<string, Stream?> openResource, MaterialResolver? materialResolver = null,
+        Action<string>? missingTexture = null)
     {
         var resolution = ResolveMaterial(meshPath, openResource, materialResolver ?? new MaterialResolver());
-        return ListReferencedTexturePaths(resolution, openResource);
+        return ListReferencedTexturePaths(resolution, openResource, missingTexture);
     }
 
-    public static IReadOnlyList<string> ListReferencedTexturePaths(MaterialResolution resolution, Func<string, Stream?> openResource)
+    public static IReadOnlyList<string> ListReferencedTexturePaths(MaterialResolution resolution, Func<string, Stream?> openResource,
+        Action<string>? missingTexture = null)
     {
         if (resolution.RequiresSelection) throw new MaterialSelectionRequiredException(resolution);
         if (resolution.SelectedPath == null) return [];
@@ -609,7 +611,13 @@ public static class ViewportDataLoader
         return mdf.Materials.SelectMany(material => material.Textures)
             .Select(texture => texture.texPath)
             .Where(path => !string.IsNullOrWhiteSpace(path) && !IsNullTexture(path))
-            .Select(path => ResolveNormalizedPath(openResource, path, resolution.MeshPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+            {
+                var resolved = ResolveNormalizedPath(openResource, path, resolution.MeshPath);
+                if (resolved == null) missingTexture?.Invoke($"{resolution.SelectedPath} 引用贴图未找到：{path}");
+                return resolved;
+            })
             .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

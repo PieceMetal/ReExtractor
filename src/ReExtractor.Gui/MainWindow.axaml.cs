@@ -2509,6 +2509,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             catch { return null; }
         }
         MaterialResolver? materialResolver = null;
+        var texturesPending = false;
         try
         {
             materialResolver = await PrepareMaterialsAsync(pak, paths);
@@ -2556,7 +2557,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 }
                 finally { TryDeleteDirectory(workDir); }
             });
-            ActionStatus.Text = $"模型 FBX 已生成：已将全部 {sourceCount} 个源模型合并为 1 个模型 | {outputPath}";
+            texturesPending = true;
+            ActionStatus.Text = $"模型 FBX 已生成，关联贴图尚未完成，请等待… | {outputPath}";
         }
         catch (Exception ex)
         {
@@ -2565,25 +2567,35 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         }
         finally
         {
-            ExportButton.IsEnabled = true;
-            EndProgress(progress);
+            if (!texturesPending)
+            {
+                ExportButton.IsEnabled = true;
+                EndProgress(progress);
+            }
         }
 
-        // FBX is the primary result. Do not keep its progress bar or export button locked
-        // while the optional MDF/TEX post-processing runs, which can take much longer for
-        // characters with many material maps.
-        ActionStatus.Text = $"模型 FBX 已生成，正在后台导出 MDF 关联贴图… | {outputPath}";
+        // Keep this a single visible operation until every associated texture finishes.
+        ActionStatus.Text = $"模型 FBX 已生成，正在导出 MDF 关联贴图，请勿关闭程序… | {outputPath}";
         try
         {
+            var textureDirectory = Path.Combine(outDir, "textures");
+            Directory.CreateDirectory(textureDirectory);
+            AppendLog($"关联贴图将保存到：{textureDirectory}");
             var result = await Task.Run(() =>
             {
                 var referencedTextures = paths.SelectMany(path =>
-                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenCapturedResource, materialResolver))
+                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenCapturedResource, materialResolver,
+                            message => Avalonia.Threading.Dispatcher.UIThread.Post(() => AppendLog(message))))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                var textureResult = ExportTextureFiles(pak, referencedTextures, outDir);
+                var textureResult = TextureExportService.ExportTextureFiles(pak, referencedTextures, outDir,
+                    (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                        UpdateCountProgress(progress, current, total, "导出关联贴图")),
+                    message => Avalonia.Threading.Dispatcher.UIThread.Post(() => AppendLog(message)));
                 return (referencedTextures.Length, textureResult.exported, textureResult.failures);
             });
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { },
+                Avalonia.Threading.DispatcherPriority.Background);
             foreach (var failure in result.failures) AppendLog("模型相关贴图导出失败：" + failure);
             var textureSummary = result.Item1 == 0
                 ? "未找到 MDF 引用贴图"
@@ -2594,6 +2606,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         {
             AppendLog("模型 FBX 已生成，但关联贴图后处理失败：" + ex.Message);
             ActionStatus.Text = $"模型 FBX 已生成；关联贴图导出失败（详见日志） | {outputPath}";
+        }
+        finally
+        {
+            ExportButton.IsEnabled = true;
+            EndProgress(progress);
         }
     }
 
