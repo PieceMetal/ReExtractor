@@ -584,37 +584,36 @@ public static class ViewportDataLoader
 {
     private sealed record PreviewMaterial(ViewportTexture Texture, bool AlphaCutout);
 
-    /// <summary>Resolve every non-placeholder TEX resource referenced by the mesh's sibling MDF.</summary>
-    public static IReadOnlyList<string> ListReferencedTexturePaths(
-        string meshPath, Func<string, Stream?> openResource)
+    public static MaterialResolution ResolveMaterial(string meshPath, Func<string, Stream?> openResource,
+        MaterialResolver resolver)
     {
-        var dotMesh = meshPath.IndexOf(".mesh.", StringComparison.OrdinalIgnoreCase);
-        if (dotMesh < 0) return [];
-        var meshBasePath = meshPath[..dotMesh];
-        foreach (var nameSuffix in MdfNameSuffixCandidates)
-        foreach (var versionSuffix in MdfVersionCandidates)
-        {
-            var mdfPath = meshBasePath + nameSuffix + versionSuffix;
-            using var mdfStream = openResource(mdfPath);
-            if (mdfStream == null) continue;
-            try
-            {
-                var mdf = MdfService.Read(mdfStream, mdfPath);
-                return mdf.Materials.SelectMany(material => material.Textures)
-                    .Select(texture => texture.texPath)
-                    .Where(path => !string.IsNullOrWhiteSpace(path) && !IsNullTexture(path))
-                    .Select(path => ResolveNormalizedPath(openResource, path, meshPath))
-                    .Where(path => path != null)
-                    .Select(path => path!)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-            }
-            catch { continue; }
-        }
-        return [];
+        using var stream = openResource(meshPath) ?? throw new FileNotFoundException("找不到模型", meshPath);
+        using var mesh = MeshService.LoadMesh(stream, meshPath, openResource);
+        return resolver.Resolve(meshPath, mesh.MaterialNames.ToArray(), openResource);
     }
 
-    public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null, bool loadTextures = true)
+    /// <summary>Export references from the same validated MDF used by preview.</summary>
+    public static IReadOnlyList<string> ListReferencedTexturePaths(
+        string meshPath, Func<string, Stream?> openResource, MaterialResolver? materialResolver = null)
+    {
+        var resolution = ResolveMaterial(meshPath, openResource, materialResolver ?? new MaterialResolver());
+        return ListReferencedTexturePaths(resolution, openResource);
+    }
+
+    public static IReadOnlyList<string> ListReferencedTexturePaths(MaterialResolution resolution, Func<string, Stream?> openResource)
+    {
+        if (resolution.RequiresSelection) throw new MaterialSelectionRequiredException(resolution);
+        if (resolution.SelectedPath == null) return [];
+        using var stream = openResource(resolution.SelectedPath) ?? throw new FileNotFoundException("找不到所选材质", resolution.SelectedPath);
+        using var mdf = MdfService.Read(stream, resolution.SelectedPath);
+        return mdf.Materials.SelectMany(material => material.Textures)
+            .Select(texture => texture.texPath)
+            .Where(path => !string.IsNullOrWhiteSpace(path) && !IsNullTexture(path))
+            .Select(path => ResolveNormalizedPath(openResource, path, resolution.MeshPath))
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+    public static ViewportMesh LoadMesh(Stream meshStream, string nativePath, int lodIndex = 0, Func<string, Stream?>? openResource = null, bool loadTextures = true, MaterialResolver? materialResolver = null)
     {
         using var mesh = MeshService.LoadMesh(meshStream, nativePath, openResource);
         var meshData = mesh.MeshData ?? throw new InvalidDataException("MeshData missing");
@@ -623,7 +622,7 @@ public static class ViewportDataLoader
         // resolve material textures via the model's .mdf2 (best effort)
         var materialTextures = openResource == null || !loadTextures
             ? new Dictionary<int, PreviewMaterial>()
-            : ResolveMaterialTextures(mesh, nativePath, openResource);
+            : ResolveMaterialTextures(mesh, nativePath, openResource, materialResolver ?? new MaterialResolver());
 
         var verts = new List<Vector3>();
         var normals = new List<Vector3>();
@@ -812,7 +811,7 @@ public static class ViewportDataLoader
     /// Returns materialIndex -> decoded texture (best effort; missing pieces are skipped).
     /// </summary>
     private static Dictionary<int, PreviewMaterial> ResolveMaterialTextures(
-        MeshFile mesh, string meshPath, Func<string, Stream?> openResource)
+        MeshFile mesh, string meshPath, Func<string, Stream?> openResource, MaterialResolver resolver)
     {
         var result = new Dictionary<int, PreviewMaterial>();
         // Several material variants (cloth/metal/pants, for example) often share
@@ -820,34 +819,12 @@ public static class ViewportDataLoader
         // each material its own writable pixel copy for tint/mask processing.
         var decodedBaseTextures = new Dictionary<string, ViewportTexture>(StringComparer.OrdinalIgnoreCase);
 
-        // MDF naming varies by game. OWOTS uses the mesh basename directly with
-        // .mdf2.50, while SF6 commonly adds _v00 and uses .mdf2.31.
-        var dotMesh = meshPath.IndexOf(".mesh.", StringComparison.OrdinalIgnoreCase);
-        if (dotMesh < 0) return result;
-        var meshBasePath = meshPath[..dotMesh];
-        Stream? foundMdfStream = null;
-        string? mdfPath = null;
-        foreach (var nameSuffix in MdfNameSuffixCandidates)
-        {
-            foreach (var versionSuffix in MdfVersionCandidates)
-            {
-                var candidate = meshBasePath + nameSuffix + versionSuffix;
-                foundMdfStream = openResource(candidate);
-                if (foundMdfStream == null) continue;
-                mdfPath = candidate;
-                break;
-            }
-            if (foundMdfStream != null) break;
-        }
-        if (foundMdfStream == null || mdfPath == null) return result;
-        using var mdfStream = foundMdfStream;
-        MdfFile mdf;
-        try
-        {
-            mdf = MdfService.Read(mdfStream, mdfPath);
-        }
-        catch { return result; }
-
+        var resolution = resolver.Resolve(meshPath, mesh.MaterialNames.ToArray(), openResource);
+        if (resolution.RequiresSelection) throw new MaterialSelectionRequiredException(resolution);
+        if (resolution.SelectedPath == null) return result;
+        using var mdfStream = openResource(resolution.SelectedPath);
+        if (mdfStream == null) return result;
+        using var mdf = MdfService.Read(mdfStream, resolution.SelectedPath);
         var isSf6Character = Sf6MaterialColors.IsCharacter(meshPath);
         if (isSf6Character)
         {
@@ -863,7 +840,7 @@ public static class ViewportDataLoader
         for (var m = 0; m < mdf.Materials.Count; m++)
         {
             var mat = mdf.Materials[m];
-            var meshMatIndex = nameToIndex.TryGetValue(mat.Name, out var idx) ? idx : (m < mesh.MaterialNames.Count ? m : -1);
+            var meshMatIndex = nameToIndex.TryGetValue(mat.Name, out var idx) ? idx : -1;
             if (meshMatIndex < 0 || result.ContainsKey(meshMatIndex)) continue;
 
             // Albedo slot priority: the material's authored base-color channel first.
@@ -1412,9 +1389,9 @@ public static class ViewportDataLoader
 
     // Onimusha event-only parts use _event_00; Shizuka uses _c with
     // additional cinematic variants. Preserve the existing default priority.
-    private static readonly string[] MdfNameSuffixCandidates = ["", "_v00", "_event_00", "_c", "_c_event_00", "_d_event_00"];
+    internal static readonly string[] MdfNameSuffixCandidates = ["", "_v00", "_event_00", "_c", "_c_event_00", "_d_event_00"];
 
-    private static readonly string[] MdfVersionCandidates =
+    internal static readonly string[] MdfVersionCandidates =
         [".mdf2.51", ".mdf2.50", ".mdf2.49", ".mdf2.45", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
          ".mdf2.23", ".mdf2.21", ".mdf2.19", ".mdf2.13", ".mdf2.10", ".mdf2.6"];
 

@@ -181,7 +181,11 @@
                 <ComboBoxItem>线框</ComboBoxItem><ComboBoxItem>材质 + 边线</ComboBoxItem>
               </ComboBox>
               <Button Grid.Column="5" x:Name="LoadTexturesButton" Content="加载贴图" Click="OnLoadTexturesClicked" Margin="8,0,0,0"
-                      ToolTip.Tip="默认只加载模型；需要材质贴图时再点击"/>
+                      ToolTip.Tip="默认只加载模型；需要材质贴图时再点击。右键可重新选择材质版本。">
+                <Button.ContextMenu>
+                  <ContextMenu><MenuItem Header="重新选择材质版本…" Click="OnReselectMaterialClicked"/></ContextMenu>
+                </Button.ContextMenu>
+              </Button>
               <Button Grid.Column="6" Content="全屏（F11）" Click="OnViewportFullscreenClicked" Margin="8,0,0,0"
                       ToolTip.Tip="隐藏工具面板并让用户视图全屏；再次按 F11 退出"/>
               <TextBlock Grid.Column="7" x:Name="FpsText" Text="" VerticalAlignment="Center" HorizontalAlignment="Right"

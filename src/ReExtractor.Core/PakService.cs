@@ -14,6 +14,8 @@ public sealed record PakExtractionResult(int Exported, int Failed, IReadOnlyList
 /// </summary>
 public sealed class PakService
 {
+    public MaterialResolver CreateMaterialResolver(IReadOnlyDictionary<string, string>? choices = null)
+        => new(_knownPaths.Values.Concat(_folderFiles.Keys).Concat(_folderAliases.Keys), choices);
     private readonly List<string> _pakFiles = new();
     private readonly List<FolderMount> _folderMounts = new();
     private readonly Dictionary<ulong, string> _knownPaths = new();

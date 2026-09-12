@@ -156,6 +156,7 @@ public partial class MainWindow : Window
     private bool _batchModelExportRunning;
     private string? _lastMeshPath;
     private readonly List<string> _previewMeshPaths = new();
+    private readonly Dictionary<string, string> _materialChoices = new(StringComparer.OrdinalIgnoreCase);
     private string? _previewScenePath;
     private readonly string _tempDir = AppPaths.TempDirectory;
     private readonly string _logDirectory = AppPaths.LogsDirectory;
@@ -1124,6 +1125,7 @@ public partial class MainWindow : Window
             }
 
             _pak = source;
+            _materialChoices.Clear();
             _all = entries;
             _treeRoot = treeRoot;
             _byPath.Clear();
@@ -1199,6 +1201,7 @@ public partial class MainWindow : Window
             });
 
             _pak = pak;
+            _materialChoices.Clear();
             _all = entries;
             _treeRoot = treeRoot;
             _byPath.Clear();
@@ -1859,6 +1862,46 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
 
     private async void OnLoadTexturesClicked(object? sender, RoutedEventArgs e)
+        => await LoadPreviewTexturesAsync();
+
+    private async void OnReselectMaterialClicked(object? sender, RoutedEventArgs e)
+        => await LoadPreviewTexturesAsync(reselect: true);
+
+    private async Task<MaterialResolver?> PrepareMaterialsAsync(PakService pak, string[] paths, bool reselect = false)
+    {
+        var choices = new Dictionary<string, string>(_materialChoices, StringComparer.OrdinalIgnoreCase);
+        if (reselect) foreach (var path in paths) choices.Remove(path);
+        var resolver = pak.CreateMaterialResolver(choices);
+        Stream? Open(string path) { try { return pak.ReadFile(path); } catch (FileNotFoundException) { return null; } }
+        foreach (var path in paths)
+        {
+            ActionStatus.Text = $"正在检查材质：{Path.GetFileName(path)}";
+            MaterialResolution resolution;
+            try { resolution = await Task.Run(() => ViewportDataLoader.ResolveMaterial(path, Open, resolver)); }
+            catch (Exception ex) { AppendLog($"材质检查失败 {path}：{ex.Message}"); continue; }
+            if (!ReferenceEquals(_pak, pak)) return null;
+            foreach (var diagnostic in resolution.Diagnostics) AppendLog(diagnostic);
+            if (resolution.RequiresSelection)
+            {
+                var selected = await new MaterialSelectionWindow(resolution).ShowDialog<string?>(this);
+                if (!ReferenceEquals(_pak, pak)) return null;
+                if (selected == null) { ActionStatus.Text = "已取消材质选择"; return null; }
+                resolver.Choose(resolution, selected);
+                choices[path] = selected;
+                AppendLog($"所选材质 {path} → {selected}");
+            }
+            else if (resolution.SelectedPath != null) AppendLog($"匹配材质 {path} → {resolution.SelectedPath}");
+        }
+        // Do not discard an earlier selection when a later dialog is cancelled.
+        foreach (var path in paths)
+        {
+            if (choices.TryGetValue(path, out var selected)) _materialChoices[path] = selected;
+            else if (reselect) _materialChoices.Remove(path);
+        }
+        return resolver;
+    }
+
+    private async Task LoadPreviewTexturesAsync(bool reselect = false)
     {
         if (_pak == null || _previewMeshPaths.Count == 0)
         {
@@ -1867,12 +1910,16 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         }
 
         var paths = _previewMeshPaths.ToArray();
+        var pak = _pak;
         var operation = ++_previewSeq;
         var textureOperation = ++_textureLoadSeq;
         var progress = BeginProgress("正在加载贴图…");
         LoadTexturesButton.IsEnabled = false;
         try
         {
+            var resolver = await PrepareMaterialsAsync(pak, paths, reselect);
+            if (resolver == null || operation != _previewSeq || textureOperation != _textureLoadSeq) return;
+            Stream? Open(string path) { try { return pak.ReadFile(path); } catch (FileNotFoundException) { return null; } }
             var meshes = new ViewportMesh[paths.Length];
             for (var index = 0; index < paths.Length; index++)
             {
@@ -1881,8 +1928,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     $"正在解码贴图 {index + 1}/{paths.Length}：{Path.GetFileName(path)}");
                 meshes[index] = await Task.Run(() =>
                 {
-                    using var ms = _pak.ReadFile(path);
-                    return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: true);
+                    using var ms = pak.ReadFile(path);
+                    return ViewportDataLoader.LoadMesh(ms, path, 1, Open, loadTextures: true, resolver);
                 });
                 if (operation != _previewSeq || textureOperation != _textureLoadSeq) return;
                 UpdateProgress(progress, index + 1, $"正在加载贴图 {index + 1}/{paths.Length}");
@@ -2461,8 +2508,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             try { return pak.ReadFile(nativePath); }
             catch { return null; }
         }
+        MaterialResolver? materialResolver = null;
         try
         {
+            materialResolver = await PrepareMaterialsAsync(pak, paths);
+            if (materialResolver == null) return;
             await Task.Run(() =>
             {
                 EnsureBlender(blender);
@@ -2476,7 +2526,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     {
                         using var stream = pak.ReadFile(path);
                         return ViewportDataLoader.LoadMesh(stream, path, 1,
-                            OpenCapturedResource, loadTextures: true);
+                            OpenCapturedResource, loadTextures: true, materialResolver);
                     }).ToArray();
                     (ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups)[] models;
                     if (exportModels.Count == texturedMeshes.Length)
@@ -2528,7 +2578,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var result = await Task.Run(() =>
             {
                 var referencedTextures = paths.SelectMany(path =>
-                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenCapturedResource))
+                        ViewportDataLoader.ListReferencedTexturePaths(path, OpenCapturedResource, materialResolver))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
                 var textureResult = ExportTextureFiles(pak, referencedTextures, outDir);
@@ -2898,12 +2948,14 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var pak = _pak;
             var blender = CurrentBlenderPath;
             var outputRoot = Path.GetFullPath(CurrentOutputDirectory);
+            var materialResolver = await PrepareMaterialsAsync(pak, paths);
+            if (materialResolver == null) return;
             progress = BeginProgress($"正在分别导出 {paths.Length} 个模型…", false, paths.Length);
             var operation = progress.Value;
             var result = await Task.Run(() => ModelBatchExportService.Export(pak, paths, outputRoot, _tempDir,
                 (input, output) => RunBlenderBatch("export_models_fbx.py", blender, input, output),
                 (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    UpdateCountProgress(operation, current, total, "批量导出模型"))));
+                    UpdateCountProgress(operation, current, total, "批量导出模型")), materialResolver));
             foreach (var failure in result.Failures) AppendLog("模型批量导出失败：" + failure);
             foreach (var output in result.OutputFiles) AppendLog("模型已单独导出：" + output);
             ActionStatus.Text = $"批量导出完成：成功 {result.OutputFiles.Count}，失败 {result.Failures.Count} | {Path.Combine(outputRoot, "models")}";

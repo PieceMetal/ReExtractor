@@ -7,13 +7,14 @@ public static class ModelBatchExportService
 {
     public static ModelBatchExportResult Export(PakService pak, IReadOnlyList<string> paths,
         string outputRoot, string temporaryRoot, Action<string, string> convertToFbx,
-        Action<int, int>? progress = null)
+        Action<int, int>? progress = null, MaterialResolver? materialResolver = null)
     {
         var exported = new List<string>();
         var outputs = new List<string>();
         var failures = new List<string>();
         var modelsRoot = Path.GetFullPath(Path.Combine(outputRoot, "models"));
         var sources = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        materialResolver ??= pak.CreateMaterialResolver();
         Stream? Open(string path)
         {
             try { return pak.ReadFile(path); }
@@ -34,7 +35,7 @@ public static class ModelBatchExportService
                 if (!output.StartsWith(modelsRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("模型导出路径超出输出目录");
                 using var stream = pak.ReadFile(path);
-                var mesh = ViewportDataLoader.LoadMesh(stream, path, 1, Open, loadTextures: true);
+                var mesh = ViewportDataLoader.LoadMesh(stream, path, 1, Open, loadTextures: true, materialResolver);
                 if (mesh.FaceCount == 0) throw new InvalidDataException("模型没有可导出的面");
                 workDirectory = Path.Combine(temporaryRoot, "model_batch_" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(workDirectory);
@@ -49,7 +50,7 @@ public static class ModelBatchExportService
                 outputs.Add(output);
                 // Preserve every MDF map beside batch results too, including packed
                 // normal/mask maps that cannot be represented by FBX materials.
-                var references = ViewportDataLoader.ListReferencedTexturePaths(path, Open);
+                var references = ViewportDataLoader.ListReferencedTexturePaths(path, Open, materialResolver);
                 var textures = TextureExportService.ExportTextureFiles(pak, references, outputRoot);
                 failures.AddRange(textures.failures.Select(failure => $"{path} 关联贴图: {failure}"));
             }
