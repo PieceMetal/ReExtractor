@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -155,6 +155,7 @@ public partial class MainWindow : Window
     private IReadOnlyList<string> _contextResourcePaths = [];
     private bool _batchModelExportRunning;
     private string? _lastMeshPath;
+    private int _selectedLod;
     private readonly List<string> _previewMeshPaths = new();
     private readonly Dictionary<string, string> _materialChoices = new(StringComparer.OrdinalIgnoreCase);
     private string? _previewScenePath;
@@ -1563,7 +1564,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     var viewportMesh = await Task.Run(() =>
                     {
                         using var ms = _pak.ReadFile(path);
-                        return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: false);
+                        return ViewportDataLoader.LoadMesh(ms, path, _selectedLod, OpenResource, loadTextures: false);
                     });
                     if (IsStale()) return;
                     ShowViewport();
@@ -1932,7 +1933,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 meshes[index] = await Task.Run(() =>
                 {
                     using var ms = pak.ReadFile(path);
-                    return ViewportDataLoader.LoadMesh(ms, path, 1, Open, loadTextures: true, resolver);
+                    return ViewportDataLoader.LoadMesh(ms, path, _selectedLod, Open, loadTextures: true, resolver);
                 });
                 if (operation != _previewSeq || textureOperation != _textureLoadSeq) return;
                 UpdateProgress(progress, index + 1, $"正在加载贴图 {index + 1}/{paths.Length}");
@@ -2529,7 +2530,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     var texturedMeshes = paths.Select(path =>
                     {
                         using var stream = pak.ReadFile(path);
-                        return ViewportDataLoader.LoadMesh(stream, path, 1,
+                        return ViewportDataLoader.LoadMesh(stream, path, _selectedLod,
                             OpenCapturedResource, loadTextures: true, materialResolver);
                     }).ToArray();
                     (ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups)[] models;
@@ -2838,7 +2839,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var vm = await Task.Run(() =>
             {
                 using var ms = _pak.ReadFile(path);
-                return ViewportDataLoader.LoadMesh(ms, path, 1, OpenResource, loadTextures: false);
+                return ViewportDataLoader.LoadMesh(ms, path, _selectedLod, OpenResource, loadTextures: false);
             });
             if (sceneOperation != _previewSeq) return;
             ShowViewport();
@@ -2972,10 +2973,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (materialResolver == null) return;
             progress = BeginProgress($"正在分别导出 {paths.Length} 个模型…", false, paths.Length);
             var operation = progress.Value;
+            var exportLod = _selectedLod;
             var result = await Task.Run(() => ModelBatchExportService.Export(pak, paths, outputRoot, _tempDir,
                 (input, output) => RunBlenderBatch("export_models_fbx.py", blender, input, output),
                 (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    UpdateCountProgress(operation, current, total, "批量导出模型")), materialResolver));
+                    UpdateCountProgress(operation, current, total, "批量导出模型")), materialResolver, exportLod));
             foreach (var failure in result.Failures) AppendLog("模型批量导出失败：" + failure);
             foreach (var output in result.OutputFiles) AppendLog("模型已单独导出：" + output);
             ActionStatus.Text = $"批量导出完成：成功 {result.OutputFiles.Count}，失败 {result.Failures.Count} | {Path.Combine(outputRoot, "models")}";
@@ -3179,21 +3181,38 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private static bool SameSkeleton(ViewportMesh a, ViewportMesh b)
         => ViewportMesh.TryGetMergeCompatibility([a, b], out _);
 
-    private async void OnMergeLoadClicked(object? sender, RoutedEventArgs e)
+    private async void OnMergeLoadClicked(object? sender, RoutedEventArgs e) => await LoadModelPathsAsync(_mergeQueue.ToArray());
+    private async void OnLodChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (_mergeQueue.Count == 0) { ActionStatus.Text = "合并队列为空"; return; }
+        if (LodCombo == null || LodCombo.SelectedIndex < 0) return;
+        var selected = LodCombo.SelectedIndex;
+        if (selected == _selectedLod) return;
+        if (ExportButton != null && !ExportButton.IsEnabled)
+        {
+            LodCombo.SelectedIndex = _selectedLod;
+            return;
+        }
+        _selectedLod = selected;
+        if (_pak == null || _previewMeshPaths.Count == 0) return;
+        await LoadModelPathsAsync(_previewMeshPaths.ToArray());
+        AppendLog($"已请求 LOD{selected}；预览模型导出使用相同档位，缺少该档的分件使用最后一级。");
+    }
+
+    private async Task LoadModelPathsAsync(string[] paths)
+    {
+        if (paths.Length == 0) { ActionStatus.Text = "合并队列为空"; return; }
         if (_pak == null) { ActionStatus.Text = "请先加载 PAK"; return; }
         // Joining the queue starts from selected rows, and row selection also starts an
         // asynchronous single-model preview. Give this merge operation ownership of the
         // scene so an older preview cannot overwrite the merged result after it completes.
         InvalidateTextureLoad();
         var sceneOperation = ++_previewSeq;
-        var progress = BeginProgress($"正在加载模型 0/{_mergeQueue.Count}", indeterminate: false,
-            maximum: _mergeQueue.Count);
-        ActionStatus.Text = $"合并加载中（{_mergeQueue.Count} 个模型）…";
+        var progress = BeginProgress($"正在加载模型 0/{paths.Length}", indeterminate: false,
+            maximum: paths.Length);
+        ActionStatus.Text = $"合并加载中（{paths.Length} 个模型）…";
         try
         {
-            var paths = _mergeQueue.ToArray();
+            var lodIndex = _selectedLod;
             var meshes = new List<ViewportMesh>(paths.Length);
             var loadedPaths = new List<string>(paths.Length);
             var skipped = new List<string>();
@@ -3203,7 +3222,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 var mesh = await Task.Run(() =>
                 {
                     using var ms = _pak.ReadFile(paths[index]);
-                    return ViewportDataLoader.LoadMesh(ms, paths[index], 1, OpenResource, loadTextures: false);
+                    return ViewportDataLoader.LoadMesh(ms, paths[index], lodIndex, OpenResource, loadTextures: false);
                 });
                 if (mesh.VertexCount == 0 || mesh.FaceCount == 0)
                 {

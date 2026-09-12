@@ -7,7 +7,7 @@ public static class ModelBatchExportService
 {
     public static ModelBatchExportResult Export(PakService pak, IReadOnlyList<string> paths,
         string outputRoot, string temporaryRoot, Action<string, string> convertToFbx,
-        Action<int, int>? progress = null, MaterialResolver? materialResolver = null)
+        Action<int, int>? progress = null, MaterialResolver? materialResolver = null, int lodIndex = 0)
     {
         var exported = new List<string>();
         var outputs = new List<string>();
@@ -35,7 +35,7 @@ public static class ModelBatchExportService
                 if (!output.StartsWith(modelsRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("模型导出路径超出输出目录");
                 using var stream = pak.ReadFile(path);
-                var mesh = ViewportDataLoader.LoadMesh(stream, path, 1, Open, loadTextures: true, materialResolver);
+                var mesh = ViewportDataLoader.LoadMesh(stream, path, lodIndex, Open, loadTextures: true, materialResolver);
                 if (mesh.FaceCount == 0) throw new InvalidDataException("模型没有可导出的面");
                 workDirectory = Path.Combine(temporaryRoot, "model_batch_" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(workDirectory);
