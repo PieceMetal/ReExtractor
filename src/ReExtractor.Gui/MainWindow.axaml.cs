@@ -156,6 +156,8 @@ public partial class MainWindow : Window
     private bool _batchModelExportRunning;
     private string? _lastMeshPath;
     private int _selectedLod;
+    private string? _loadedPresetName;
+    private string[] _loadedPresetPaths = [];
     private readonly List<string> _previewMeshPaths = new();
     private readonly Dictionary<string, string> _materialChoices = new(StringComparer.OrdinalIgnoreCase);
     private string? _previewScenePath;
@@ -397,6 +399,8 @@ public partial class MainWindow : Window
         try
         {
             var preset = _assemblyPresetService.Load(files[0].Path.LocalPath);
+            _loadedPresetName = preset.Name;
+            _loadedPresetPaths = preset.MeshPaths.ToArray();
             var missing = preset.MeshPaths.Where(path => !_byPath.ContainsKey(path)).ToArray();
 
             // A preset replaces the next scene that will be assembled. Do not leave an
@@ -2502,8 +2506,12 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var outDir = Path.GetFullPath(CurrentOutputDirectory);
         if (!await EnsureBlenderReadyAsync()) return;
         var blender = CurrentBlenderPath;
-        var outputPath = Path.Combine(outDir, NativeStem(paths[0], ".mesh") +
-            (sourceCount > 1 ? $"_合并{sourceCount}个模型" : "") + ".fbx");
+        var usePresetName = !string.IsNullOrWhiteSpace(_loadedPresetName) &&
+            paths.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(_loadedPresetPaths);
+        var modelName = usePresetName ? _loadedPresetName! : NativeStem(paths[0], ".mesh");
+        var invalidNameChars = Path.GetInvalidFileNameChars();
+        modelName = new string(modelName.Select(c => invalidNameChars.Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.');
+        var outputPath = Path.Combine(outDir, $"{modelName}_LOD{_selectedLod}.fbx");
         var progress = BeginProgress("正在合并并导出 FBX…");
         ActionStatus.Text = $"正在导出预览中的全部 {sourceCount} 个源模型（场景对象 {exportModels.Count} 个）…";
         ExportButton.IsEnabled = false;
@@ -2668,6 +2676,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             RedirectStandardError = true,
         };
         start.ArgumentList.Add("--background");
+        start.ArgumentList.Add("--python-exit-code");
+        start.ArgumentList.Add("1");
         start.ArgumentList.Add("--python");
         start.ArgumentList.Add(script);
         start.ArgumentList.Add("--");
@@ -2698,10 +2708,15 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         string stdout;
         lock (stdoutText) stdout = stdoutText.ToString();
         var outputText = stdout + "\n" + stderr.GetAwaiter().GetResult();
+        Directory.CreateDirectory(AppPaths.LogsDirectory);
+        var conversionLog = Path.Combine(AppPaths.LogsDirectory, $"fbx-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.log");
+        File.WriteAllText(conversionLog,
+            $"Blender: {blender}\nScript: {script}\nInput: {input}\nOutput: {output}\nExitCode: {process.ExitCode}\n{outputText}");
         if (process.ExitCode != 0 || !outputText.Contains("REEXTRACTOR_OK:", StringComparison.Ordinal))
         {
             var tail = outputText.Length > 2000 ? outputText[^2000..] : outputText;
-            throw new InvalidOperationException($"FBX 转换失败（代码 {process.ExitCode}）\n{tail}");
+            var reason = process.ExitCode == 0 ? "未收到脚本完成标记" : $"代码 {process.ExitCode}";
+            throw new InvalidOperationException($"FBX 转换失败（{reason}）\n完整记录：{conversionLog}\n{tail}");
         }
     }
 
