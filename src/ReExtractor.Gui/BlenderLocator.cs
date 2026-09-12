@@ -13,6 +13,17 @@ namespace ReExtractor.Gui;
 /// </summary>
 public static class BlenderLocator
 {
+    public static string NormalizeExecutable(string? path)
+    {
+        var value = path?.Trim().Trim('"') ?? "";
+        if (!IsLauncher(value)) return value;
+        var executable = Path.Combine(Path.GetDirectoryName(value) ?? "", "blender.exe");
+        return File.Exists(executable) ? executable : value;
+    }
+
+    public static bool IsLauncher(string path) =>
+        string.Equals(Path.GetFileName(path), "blender-launcher.exe", StringComparison.OrdinalIgnoreCase);
+
     public static string? Detect()
     {
         var candidates = new List<string>();

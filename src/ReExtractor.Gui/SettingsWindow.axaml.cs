@@ -25,7 +25,7 @@ public partial class SettingsWindow : Window
             AllowMultiple = false,
             FileTypeFilter = [new FilePickerFileType("程序") { Patterns = ["*.exe"] }],
         });
-        if (files.Count > 0) BlenderPathBox.Text = files[0].Path.LocalPath;
+        if (files.Count > 0) BlenderPathBox.Text = BlenderLocator.NormalizeExecutable(files[0].Path.LocalPath);
     }
 
     private void OnDetectBlenderClicked(object? sender, RoutedEventArgs e)
@@ -61,7 +61,7 @@ public partial class SettingsWindow : Window
     }
     private void OnSaveClicked(object? sender, RoutedEventArgs e) => Close(new AppSettings
     {
-        BlenderPath = BlenderPathBox.Text?.Trim() ?? "",
+        BlenderPath = BlenderLocator.NormalizeExecutable(BlenderPathBox.Text),
         OutputDirectory = OutputDirectoryBox.Text?.Trim() ?? "",
     });
 

@@ -10,7 +10,11 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 > 请在 Releases 页面选择所需版本的 Windows x64 构建包，解压后运行唯一的 `ReExtractor-vX.Y.Z.exe`。首次启动会自动释放必要的贴图解码库，并在程序旁生成设置、日志、路径 list 和导出目录。
 
-当前版本：`v1.3.20`
+当前版本：`v1.3.21`
+
+## v1.3.21 更新
+
+- 选择 Blender 启动器时自动使用同目录主程序，兼容已有配置；缺少主程序时明确提示。详见 [版本说明](docs/RELEASE_NOTES_v1.3.21.md)。
 
 ## v1.3.20 更新
 

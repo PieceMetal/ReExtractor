@@ -24,6 +24,12 @@ public static class AppSettingsService
             if (File.Exists(SettingsPath))
             {
                 var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? CreateDefault();
+                var normalizedBlender = BlenderLocator.NormalizeExecutable(settings.BlenderPath);
+                if (normalizedBlender != settings.BlenderPath)
+                {
+                    settings.BlenderPath = normalizedBlender;
+                    Save(settings);
+                }
                 if (string.Equals(settings.OutputDirectory, AppPaths.LegacyOutputDirectory, StringComparison.OrdinalIgnoreCase))
                     settings.OutputDirectory = AppPaths.OutputDirectory;
                 // 自动定位 Blender：首次运行或路径失效时探测并回填

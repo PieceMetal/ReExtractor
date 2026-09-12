@@ -241,7 +241,7 @@ public partial class MainWindow : Window
     private string CurrentOutputDirectory => string.IsNullOrWhiteSpace(_settings.OutputDirectory)
         ? AppPaths.OutputDirectory
         : _settings.OutputDirectory;
-    private string CurrentBlenderPath => _settings.BlenderPath?.Trim() ?? "";
+    private string CurrentBlenderPath => BlenderLocator.NormalizeExecutable(_settings.BlenderPath);
 
     private void AppendLog(string? message)
     {
@@ -844,6 +844,12 @@ public partial class MainWindow : Window
         => await OpenSettingsDialogAsync();
     private async Task<bool> EnsureBlenderReadyAsync()
     {
+        if (BlenderLocator.IsLauncher(CurrentBlenderPath))
+        {
+            ActionStatus.Text = "当前选择的是 blender-launcher.exe，同目录未找到 blender.exe。请在设置中选择 Blender 主程序 blender.exe。";
+            await OpenSettingsDialogAsync();
+            return File.Exists(CurrentBlenderPath) && !BlenderLocator.IsLauncher(CurrentBlenderPath);
+        }
         if (File.Exists(CurrentBlenderPath)) return true;
         ActionStatus.Text = "FBX 导出需要先安装 Blender，并在设置里选择 blender.exe";
         await ShowEnvironmentWindowAsync();
@@ -2667,6 +2673,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private static void RunBlenderBatch(string scriptName, string blender, string input, string output,
         Action<int, int>? progress = null, params string[] extraArgs)
     {
+        blender = BlenderLocator.NormalizeExecutable(blender);
+        if (BlenderLocator.IsLauncher(blender))
+            throw new InvalidOperationException("请选择 blender.exe，而不是 blender-launcher.exe；同目录未找到 Blender 主程序。");
         var script = ResolveToolsScript(scriptName);
         var start = new ProcessStartInfo(blender)
         {
