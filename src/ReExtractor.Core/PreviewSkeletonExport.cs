@@ -11,7 +11,8 @@ internal static class PreviewSkeletonExport
         var driver = meshes.OrderByDescending(m => m.DeformToBone.Length)
             .ThenByDescending(m => m.VertexCount).First();
         var driverNames = driver.Bones.Select((b, i) => (b.Name, i))
-            .ToDictionary(x => x.Name, x => x.i, StringComparer.OrdinalIgnoreCase);
+            .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().i, StringComparer.OrdinalIgnoreCase);
         var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var used = meshes.SelectMany(m => m.Bones).Select(b => b.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -20,16 +21,29 @@ internal static class PreviewSkeletonExport
             while (!used.Add(stem)) stem += "_";
             return stem;
         }
+        var seenDriverNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var driverBones = driver.Bones.Select((bone, index) =>
+        {
+            var name = bone.Name;
+            if (!seenDriverNames.Add(name))
+            {
+                name = Unique($"__driver{index}_{bone.Name}");
+                aliases[name] = bone.Name;
+            }
+            return new ViewportBone { Name = name, ParentIndex = bone.ParentIndex,
+                LocalBind = bone.LocalBind, InverseGlobalBind = bone.InverseGlobalBind };
+        }).ToArray();
         var prepared = new List<ViewportMesh>();
         for (var part = 0; part < meshes.Count; part++)
         {
             var mesh = meshes[part];
-            var bones = driver.Bones.ToList();
+            var bones = driverBones.ToList();
             var map = new int[mesh.Bones.Length];
             for (var b = 0; b < map.Length; b++)
             {
                 var source = mesh.Bones[b];
-                if (driverNames.TryGetValue(source.Name, out var common)) map[b] = common;
+                if (ReferenceEquals(mesh, driver)) map[b] = b;
+                else if (driverNames.TryGetValue(source.Name, out var common)) map[b] = common;
                 else
                 {
                     map[b] = bones.Count;

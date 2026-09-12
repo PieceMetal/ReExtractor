@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,7 +40,7 @@ public sealed class RemoteFileListInfo
     [JsonIgnore] public string Identifier => FileListManagerService.IdentifierFromFileName(FileName);
     [JsonIgnore] public DateTimeOffset? UpdateTime => DateTimeOffset.TryParse(UpdateTimeRaw, out var time) ? time : null;
     [JsonIgnore] public string UpdateTimeText => UpdateTime?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "未知";
-    [JsonIgnore] public string SizeText => Size >= 1 << 20 ? $"{Size / 1048576d:F1} MB" : $"{Size / 1024d:F0} KB";
+    [JsonIgnore] public string SizeText => Size <= 0 ? "未知" : Size >= 1 << 20 ? $"{Size / 1048576d:F1} MB" : $"{Size / 1024d:F0} KB";
 }
 
 public sealed class FileListManifest
@@ -78,6 +79,7 @@ public sealed class FileListManagerService
             }
         }
         catch (IOException) { return "可更新"; }
+        if (!string.IsNullOrWhiteSpace(info.DirectUrl) && string.IsNullOrWhiteSpace(info.GitBlobSha)) return "可更新";
         return info.UpdateTime > local.UpdateTime ? "可更新" : "已安装";
     }
     private static readonly string[] ManifestUrls =
@@ -217,7 +219,51 @@ public sealed class FileListManagerService
                     Tags = ["Ekey", "REE.PAK.Tool"],
                 }).ToArray();
         }
-        catch (Exception ex) when (!token.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException or JsonException or InvalidDataException) { return []; }
+        catch (Exception ex) when (!token.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException or JsonException or InvalidDataException)
+        {
+            // GitHub REST limits anonymous requests. The public directory page
+            // provides the same current tree without requiring a user's token.
+            try
+            {
+                var html = await Http.GetStringAsync("https://github.com/Ekey/REE.PAK.Tool/tree/main/Projects", token);
+                return ParseEkeyDirectoryPage(html);
+            }
+            catch (Exception fallbackError) when (!token.IsCancellationRequested && fallbackError is HttpRequestException or TaskCanceledException or JsonException or InvalidDataException or KeyNotFoundException or InvalidOperationException)
+            {
+                return [];
+            }
+        }
+    }
+
+    internal static RemoteFileListInfo[] ParseEkeyDirectoryPage(string html)
+    {
+        var match = Regex.Match(html, "<script[^>]*data-target=\"react-app.embeddedData\"[^>]*>(.*?)</script>", RegexOptions.Singleline, TimeSpan.FromSeconds(2));
+        if (!match.Success) throw new InvalidDataException("GitHub 在线目录数据缺失");
+        using var document = JsonDocument.Parse(match.Groups[1].Value);
+        var route = document.RootElement.GetProperty("payload").GetProperty("codeViewTreeRoute");
+        if (route.GetProperty("path").GetString() != "Projects")
+            throw new InvalidDataException("GitHub 在线目录路径不匹配");
+        var revision = route.GetProperty("refInfo").GetProperty("currentOid").GetString() ?? "";
+        if (!Regex.IsMatch(revision, "^[0-9a-f]{40}$"))
+            throw new InvalidDataException("GitHub 在线目录版本无效");
+        var tree = route.GetProperty("tree");
+        var items = tree.GetProperty("items");
+        if (tree.GetProperty("totalCount").GetInt32() != items.GetArrayLength())
+            throw new InvalidDataException("GitHub 在线目录不完整");
+        return items.EnumerateArray()
+            .Where(item => item.GetProperty("contentType").GetString() == "file")
+            .Select(item => item.GetProperty("path").GetString() ?? "")
+            .Where(path => path.StartsWith("Projects/", StringComparison.Ordinal)
+                && path.EndsWith(".list", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains("..") && path.Count(c => c == '/') == 1)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => new RemoteFileListInfo
+            {
+                FileName = Path.GetFileName(path),
+                SourceName = "Ekey/REE.PAK.Tool",
+                DirectUrl = $"https://raw.githubusercontent.com/Ekey/REE.PAK.Tool/{revision}/Projects/{Uri.EscapeDataString(Path.GetFileName(path))}",
+                Tags = ["Ekey", "REE.PAK.Tool"],
+            }).ToArray();
     }
 
     public async Task<string> DownloadAsync(FileListManifest manifest, RemoteFileListInfo info,

@@ -177,6 +177,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        var displayVersion = _updateService.CurrentVersion.ToString(3);
+        Title = $"ReExtractor v{displayVersion} — RE 引擎资源工作台";
+        VersionTitleText.Text = $"◆  RE Engine 资源工具 v{displayVersion}";
         Directory.CreateDirectory(_tempDir);
         Directory.CreateDirectory(_logDirectory);
         RefreshManagedLists(_settings.LastListPath);
