@@ -47,6 +47,11 @@ public static class ModelBatchExportService
                     throw new InvalidDataException("转换程序没有生成 FBX 文件");
                 exported.Add(path);
                 outputs.Add(output);
+                // Preserve every MDF map beside batch results too, including packed
+                // normal/mask maps that cannot be represented by FBX materials.
+                var references = ViewportDataLoader.ListReferencedTexturePaths(path, Open);
+                var textures = TextureExportService.ExportTextureFiles(pak, references, outputRoot);
+                failures.AddRange(textures.failures.Select(failure => $"{path} 关联贴图: {failure}"));
             }
             catch (Exception exception) { failures.Add($"{path}: {exception.Message}"); }
             finally

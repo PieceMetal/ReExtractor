@@ -894,6 +894,11 @@ public static class ViewportDataLoader
                     albedoPath = wrinkle.texPath
                         .Replace("_skin_FW_01_ALBD.tex", "_skin_neutral_FW_01_ALB.tex", StringComparison.OrdinalIgnoreCase);
                     atlasQuadrant = !albedoPath.Equals(wrinkle.texPath, StringComparison.OrdinalIgnoreCase);
+                    // Shizuka's .ALB wrinkle atlas already contains the neutral face
+                    // in its first quadrant; unlike ch001 it has no _neutral sibling.
+                    if (meshPath.Replace('\\', '/').Contains("/ch002_00/", StringComparison.OrdinalIgnoreCase) &&
+                        albedoPath.EndsWith("_skin_FW_01_ALB.tex", StringComparison.OrdinalIgnoreCase))
+                        atlasQuadrant = true;
                 }
             }
             // Wilds materials use ColorParam for the tint used by eye lines and
@@ -1405,8 +1410,9 @@ public static class ViewportDataLoader
                type.Equals("ALBD", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Some Onimusha event-only parts (ch001_00_02) have no unsuffixed MDF.
-    private static readonly string[] MdfNameSuffixCandidates = ["", "_v00", "_event_00"];
+    // Onimusha event-only parts use _event_00; Shizuka uses _c with
+    // additional cinematic variants. Preserve the existing default priority.
+    private static readonly string[] MdfNameSuffixCandidates = ["", "_v00", "_event_00", "_c", "_c_event_00", "_d_event_00"];
 
     private static readonly string[] MdfVersionCandidates =
         [".mdf2.51", ".mdf2.50", ".mdf2.49", ".mdf2.45", ".mdf2.40", ".mdf2.34", ".mdf2.32", ".mdf2.31",
