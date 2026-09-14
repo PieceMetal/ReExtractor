@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>1.3.22</Version>
-    <AssemblyVersion>1.3.22.0</AssemblyVersion>
-    <FileVersion>1.3.22.0</FileVersion>
+    <Version>1.4.0</Version>
+    <AssemblyVersion>1.4.0.0</AssemblyVersion>
+    <FileVersion>1.4.0.0</FileVersion>
     <AssemblyName>ReExtractor-v$(Version)</AssemblyName>
     <Authors>PieceMetal</Authors>
     <Description>RE Engine 资源解包、预览与 FBX 导出工具</Description>
@@ -43,19 +43,17 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\tools\export_models_fbx.py" Link="EmbeddedTools\export_models_fbx.py" />
     <EmbeddedResource Include="..\..\tools\export_animations_fbx.py" Link="EmbeddedTools\export_animations_fbx.py" />
-    <EmbeddedResource Include="..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll"
-                      Link="EmbeddedNative\libGDeflate.dll" />
+    <EmbeddedResource Include="..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll" Link="EmbeddedNative\libGDeflate.dll" />
   </ItemGroup>
 
   <!-- The application extracts this embedded DLL before any TEX decoder is used.
        Remove the ProjectReference sidecar so each release ZIP contains one EXE. -->
-  <Target Name="RemoveGDeflateSidecarAfterPublish" AfterTargets="Publish"
-          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+  <Target Name="RemoveGDeflateSidecarAfterPublish" AfterTargets="Publish" Condition="'$(RuntimeIdentifier)' == 'win-x64'">
     <Delete Files="$(PublishDir)libGDeflate.dll" />
   </Target>
 
   <Target Name="RemovePublishSymbols" AfterTargets="Publish">
-    <Delete Files="@(ResolvedFileToPublish->WithMetadataValue('Extension', '.pdb')->'%(FullPath)')" />
+    <Delete Files="@(ResolvedFileToPublish-&gt;WithMetadataValue('Extension', '.pdb')-&gt;'%(FullPath)')" />
     <Delete Files="$([System.IO.Directory]::GetFiles('$(PublishDir)', '*.pdb', System.IO.SearchOption.TopDirectoryOnly))" />
   </Target>
 </Project>

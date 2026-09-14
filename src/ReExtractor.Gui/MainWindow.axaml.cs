@@ -156,6 +156,32 @@ public partial class MainWindow : Window
     private bool _batchModelExportRunning;
     private string? _lastMeshPath;
     private int _selectedLod;
+    private bool _feedbackOpen;
+    private int _feedbackAnimation;
+    private void OnFeedbackToggleClicked(object? sender, RoutedEventArgs e) => SetFeedbackVisible(!_feedbackOpen);
+    private async void SetFeedbackVisible(bool visible)
+    {
+        _feedbackOpen=visible;
+        var animation=++_feedbackAnimation;
+        var from=FeedbackSidebar.IsVisible?FeedbackSidebar.Width:0;
+        var fromOpacity=FeedbackSidebar.IsVisible?FeedbackSidebar.Opacity:0;
+        var target=visible?380d:0d;
+        FeedbackSidebar.IsVisible=true;
+        FeedbackSidebar.IsHitTestVisible=visible;
+        FeedbackLauncher.IsVisible=false;
+        var timer=Stopwatch.StartNew();
+        while(animation==_feedbackAnimation){
+            var progress=Math.Min(1,timer.Elapsed.TotalMilliseconds/180);
+            var eased=1-Math.Pow(1-progress,3);
+            FeedbackSidebar.Width=from+(target-from)*eased;
+            FeedbackSidebar.Opacity=fromOpacity+((visible?1:0)-fromOpacity)*eased;
+            if(progress>=1)break;
+            await Task.Delay(16);
+        }
+        if(animation!=_feedbackAnimation)return;
+        FeedbackSidebar.IsVisible=visible;
+        FeedbackLauncher.IsVisible=!visible;
+    }
     private string? _loadedPresetName;
     private string[] _loadedPresetPaths = [];
     private readonly List<string> _previewMeshPaths = new();
@@ -179,7 +205,10 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        Opened += (_, _) => { if (Array.IndexOf(Environment.GetCommandLineArgs(), "--feedback") >= 0) SetFeedbackVisible(true); };
         InitializeComponent();
+        FeedbackSidebar.CloseRequested += () => SetFeedbackVisible(false);
+        FeedbackSidebar.CurrentLogProvider = () => RunLogBox.Text ?? "";
         var displayVersion = _updateService.CurrentVersion.ToString(3);
         Title = $"ReExtractor v{displayVersion} — RE 引擎资源工作台";
         VersionTitleText.Text = $"◆  RE Engine 资源工具 v{displayVersion}";
@@ -199,6 +228,11 @@ public partial class MainWindow : Window
         }
         AppSettingsService.Save(_settings);
         RefreshAssemblyPresetHint();
+        FeedbackLauncher.AddHandler(PointerPressedEvent, OnFeedbackDragPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        FeedbackLauncher.AddHandler(PointerMovedEvent, OnFeedbackDragMoved, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        FeedbackLauncher.AddHandler(PointerReleasedEvent, OnFeedbackDragReleased, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        FeedbackLauncher.PointerCaptureLost += (_, _) => _feedbackPress = null;
+        SizeChanged += (_, _) => ClampFeedbackLauncher();
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnWindowDragOver);
         AddHandler(DragDrop.DropEvent, OnWindowDrop);
@@ -3355,4 +3389,3 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         OnOpenOutputFolderClicked(sender, e);
     }
 }
-

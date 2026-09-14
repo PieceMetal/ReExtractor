@@ -8,7 +8,8 @@
         KeyDown="OnMainWindowKeyDown"
         Background="#16191f">
 
-  <DockPanel Margin="12">
+  <Grid ColumnDefinitions="*,Auto">
+  <DockPanel Grid.Column="0" Margin="12">
     <Border x:Name="TitleStrip" DockPanel.Dock="Top" Margin="-12,-12,-12,0" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,0,0,1" Padding="14,8">
       <Grid ColumnDefinitions="Auto,*">
@@ -33,8 +34,11 @@
       <MenuItem Header="设置" Click="OnSettingsClicked"/>
       <MenuItem Header="环境" Click="OnEnvironmentClicked"/>
       <MenuItem Header="关于" Click="OnAboutClicked"/>
+      <MenuItem x:Name="FeedbackMenuItem" Header="问题反馈" Click="OnFeedbackToggleClicked"/>
       <MenuItem Header="检查更新…" Click="OnCheckUpdatesClicked"/>
+
     </Menu>
+
     <!-- Fixed status bar: current state only; detailed output stays in the log panel. -->
     <Border x:Name="StatusStrip" DockPanel.Dock="Bottom" Margin="-12,8,-12,-12" Background="#20252d"
             BorderBrush="#303947" BorderThickness="0,1,0,0" Padding="12,6">
@@ -165,7 +169,7 @@
         <Border DockPanel.Dock="Top" Background="#20252d" BorderBrush="#394352" BorderThickness="1"
                 CornerRadius="6" Padding="8" Margin="0,0,0,6" ClipToBounds="True">
           <StackPanel Spacing="5">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*">
+            <WrapPanel Orientation="Horizontal">
               <TextBlock Grid.Column="0" Text="视图" VerticalAlignment="Center" Margin="0,0,5,0"/>
               <ComboBox Grid.Column="1" x:Name="ViewCombo" Width="105" SelectedIndex="0"
                         SelectionChanged="OnViewportViewChanged">
@@ -190,8 +194,8 @@
                       ToolTip.Tip="隐藏工具面板并让用户视图全屏；再次按 F11 退出"/>
               <TextBlock Grid.Column="7" x:Name="FpsText" Text="" VerticalAlignment="Center" HorizontalAlignment="Right"
                          Margin="10,0,0,0" Foreground="#9cdcfe" TextTrimming="CharacterEllipsis"/>
-            </Grid>
-            <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
+            </WrapPanel>
+            <WrapPanel Orientation="Horizontal">
               <CheckBox Grid.Column="0" x:Name="GridCheck" Content="网格（G）" IsChecked="True"
                         Margin="0,0,12,0" IsCheckedChanged="OnGridToggled"/>
               <CheckBox Grid.Column="1" x:Name="AxesCheck" Content="坐标轴" IsChecked="True"
@@ -211,7 +215,7 @@
               <ComboBox Grid.Column="5" x:Name="MotionCombo" Width="170" MinWidth="120" MaxWidth="260"
                         HorizontalAlignment="Right" SelectionChanged="OnMotionChanged"
                         IsVisible="False"/>
-            </Grid>
+            </WrapPanel>
           </StackPanel>
         </Border>
 
@@ -560,4 +564,9 @@
 
     </Grid>
   </DockPanel>
+  <Button x:Name="FeedbackLauncher" Grid.Column="0" Content="✎  反馈" Click="OnFeedbackToggleClicked"
+          HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,18,48"
+          Background="#2379d9" Foreground="White" CornerRadius="22" Padding="17,12"/>
+  <local:FeedbackPanel x:Name="FeedbackSidebar" Grid.Column="1" Width="380" IsVisible="False"/>
+  </Grid>
 </Window>

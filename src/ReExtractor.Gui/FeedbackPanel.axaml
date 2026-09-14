@@ -1,0 +1,18 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="ReExtractor.Gui.FeedbackPanel" ClipToBounds="True">
+ <Border Background="#1b2028" BorderBrush="#354050" BorderThickness="1,0,0,0">
+ <Grid RowDefinitions="Auto,Auto,*,Auto">
+ <Grid Margin="18,16" ColumnDefinitions="*,Auto">
+ <StackPanel Spacing="4"><TextBlock Text="问题反馈" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="问题与建议，直接发送给开发者" Foreground="#98a6b8" FontSize="12"/></StackPanel>
+ <Button Grid.Column="1" Content="✕" Click="OnCloseClicked" ToolTip.Tip="收起反馈区" Background="Transparent" VerticalAlignment="Top"/>
+ </Grid>
+ <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel Margin="16,12" Spacing="14">
+ <StackPanel x:Name="EmptyState" Margin="12,28,12,20" Spacing="12"><TextBlock Text="✎" FontSize="36" Foreground="#559ff3" HorizontalAlignment="Center"/><TextBlock Text="暂无评论" FontSize="20" HorizontalAlignment="Center"/><TextBlock Text="成为第一个分享问题或建议的 R友。" Foreground="#98a6b8" TextAlignment="Center" TextWrapping="Wrap"/></StackPanel>
+ <StackPanel x:Name="DraftCards" Spacing="12"/>
+ </StackPanel></ScrollViewer>
+ <Border Grid.Row="3" BorderBrush="#303b49" BorderThickness="0,1,0,0" Padding="16"><Grid RowDefinitions="Auto,Auto" RowSpacing="10"><ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled"><StackPanel Spacing="10">
+ <StackPanel x:Name="CategoryButtons" Orientation="Horizontal" Spacing="6"><Button Content="导出失败" Click="OnCategoryClicked" FontSize="12"/><Button Content="显示异常" Click="OnCategoryClicked" FontSize="12"/><Button Content="功能建议" Click="OnCategoryClicked" FontSize="12"/></StackPanel>
+ <TextBox x:Name="DraftInput" Watermark="描述问题，可按 Ctrl+V 粘贴图片…" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="90" MaxHeight="150" TextChanged="OnDraftChanged" Background="#242c37" CornerRadius="8"/>
+ <StackPanel x:Name="AttachmentActions" Orientation="Horizontal" Spacing="8"><Button Content="选择图片" Click="OnSelectImageClicked" FontSize="12" Padding="10,7"/><Button Content="附带日志" Click="OnAttachLogClicked" FontSize="12" Padding="10,7"/></StackPanel><ScrollViewer MaxHeight="130" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="AttachmentCards" Spacing="8"/></ScrollViewer></StackPanel></ScrollViewer><Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="12"><TextBlock x:Name="FeedbackStatus" IsVisible="False" Foreground="#98a6b8" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/><Button Grid.Column="1" x:Name="SendFeedbackButton" Content="发送" Click="OnSendClicked" Background="#2379d9" Foreground="White" Padding="16,9"/></Grid>
+ </Grid></Border>
+ </Grid></Border>
+</UserControl>
