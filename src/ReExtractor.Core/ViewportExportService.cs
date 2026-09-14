@@ -181,6 +181,17 @@ public sealed class ViewportExportService
             var parent = mesh.Bones[i].ParentIndex;
             if (parent >= 0 && parent < nodes.Length && parent != i) nodes[parent].AddNode(nodes[i]);
         }
+        // MOT-only helpers can introduce independent roots. SharpGLTF requires all
+        // skin joints to belong to one tree. An identity parent preserves each
+        // source root's world transform, joint index and inverse bind matrix.
+        var roots = nodes.Select(node => node.Root).Distinct().ToArray();
+        if (roots.Length > 1)
+        {
+            var rootName = "__ReExtractor_SkeletonRoot";
+            while (mesh.Bones.Any(bone => bone.Name == rootName)) rootName += "_";
+            var commonRoot = new NodeBuilder(rootName);
+            foreach (var root in roots) commonRoot.AddNode(root);
+        }
         // Keep the complete source hierarchy in the glTF skin, including non-deforming
         // parents such as SF6's Root. Exporting deform joints only makes SharpGLTF omit
         // those parents; Blender then sees C_Hip as the root and the FBX step cannot
