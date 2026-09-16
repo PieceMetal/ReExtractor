@@ -138,6 +138,8 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         {
             var node = ResolveBoneNode(skeleton, mesh, clip);
             if (node == null) continue;
+            var binding = node.LocalMatrix;
+            var poseTrack = new BoneTrack { IsAdditive = ViewportDataLoader.UsesAdditiveFaceTrack(mot, node.Name) };
 
             if (clip.HasRotation && clip.Rotation!.rotations is { Length: > 0 } rotations)
             {
@@ -149,7 +151,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                     var t = frames != null && i < frames.Length ? frames[i] / (float)fps : i / (float)fps;
                     var q = rotations[i];
                     if (q.W < 0) q = new Quaternion(-q.X, -q.Y, -q.Z, -q.W);
-                    keys[t] = Quaternion.Normalize(q);
+                    keys[t] = poseTrack.ResolveRotation(Quaternion.Normalize(q), binding);
                 }
                 node.WithLocalRotation(animName, keys);
             }
@@ -162,7 +164,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                 for (var i = 0; i < translations.Length; i++)
                 {
                     var t = frames != null && i < frames.Length ? frames[i] / (float)fps : i / (float)fps;
-                    keys[t] = translations[i];
+                    keys[t] = poseTrack.ResolveTranslation(translations[i], binding);
                 }
                 node.WithLocalTranslation(animName, keys);
             }
@@ -216,7 +218,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                 target = (fallbackIndex, meshBoneNames[fallbackIndex]);
             }
 
-            var track = new BoneTrack();
+            var track = new BoneTrack { IsAdditive = ViewportDataLoader.UsesAdditiveFaceTrack(mot, target.Name) };
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } translations)
             {
                 var fps = TrackFrameRate(clip.Translation);

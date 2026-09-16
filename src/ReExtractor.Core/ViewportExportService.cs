@@ -219,12 +219,14 @@ public sealed class ViewportExportService
                 (clip.NamedTracks.Count > 0 || !clip.Tracks.TryGetValue(i, out track)))
                 continue;
 
+            var binding = node.LocalMatrix;
+
             if (track.RotTimes is { Length: > 0 } rotTimes &&
                 track.Rotations is { Length: > 0 } rotations)
             {
                 var keys = new Dictionary<float, Quaternion>(Math.Min(rotTimes.Length, rotations.Length));
                 for (var k = 0; k < rotTimes.Length && k < rotations.Length; k++)
-                    keys[rotTimes[k]] = rotations[k];
+                    keys[rotTimes[k]] = track.ResolveRotation(rotations[k], binding);
                 node.WithLocalRotation(animName, keys);
             }
 
@@ -237,7 +239,7 @@ public sealed class ViewportExportService
                     // exporter applies the requested Y-forward/Z-up bone-space conversion while
                     // baking the action. Pre-converting root motion here applies that basis change
                     // twice and turns forward motion into negative Z (downward) in Unreal Engine.
-                    keys[transTimes[k]] = translations[k];
+                    keys[transTimes[k]] = track.ResolveTranslation(translations[k], binding);
                 node.WithLocalTranslation(animName, keys);
             }
         }

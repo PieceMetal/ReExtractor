@@ -588,9 +588,9 @@ public sealed class Viewport3D : Control
         var scale = Vector3.One;
 
         if (track.Translations is { Length: > 0 } tr && track.TransTimes != null)
-            pos = Sample(tr, track.TransTimes, time);
+            pos = track.ResolveTranslation(Sample(tr, track.TransTimes, time), bindLocal);
         if (track.Rotations is { Length: > 0 } ro && track.RotTimes != null)
-            rot = Sample(ro, track.RotTimes, time);
+            rot = track.ResolveRotation(Sample(ro, track.RotTimes, time), bindLocal);
 
         return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rot) * Matrix4x4.CreateTranslation(pos);
     }

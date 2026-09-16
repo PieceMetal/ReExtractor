@@ -570,6 +570,12 @@ public sealed class AnimationClip
 
 public sealed class BoneTrack
 {
+    /// <summary>Facial deltas are resolved against each target part's own bind pose.</summary>
+    public bool IsAdditive;
+    public Vector3 ResolveTranslation(Vector3 value, Matrix4x4 bind)
+        => IsAdditive ? bind.Translation + value : value;
+    public Quaternion ResolveRotation(Quaternion value, Matrix4x4 bind)
+        => IsAdditive ? Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(bind) * value) : value;
     public float[]? TransTimes;
     public Vector3[]? Translations;
     public float[]? RotTimes;
@@ -1854,7 +1860,7 @@ public static class ViewportDataLoader
                     boneName = targetBoneNames[fallbackIndex];
                 }
             }
-            var track = new BoneTrack();
+            var track = new BoneTrack { IsAdditive = UsesAdditiveFaceTrack(mot, boneName ?? clip.ClipHeader.boneName) };
 
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } tr)
             {
@@ -2451,6 +2457,22 @@ public static class ViewportDataLoader
         }
         var cross = Vector3.Cross(from, to);
         return NormalizeOrIdentity(new Quaternion(cross, 1f + dot));
+    }
+
+    internal static bool UsesAdditiveFaceTrack(MotFile mot, string? boneName)
+    {
+        // OniWS cutscene face motions contain local deltas, unlike body motions.
+        // bsControl channels are blend-shape parameters, not skeletal deltas.
+        // Do not infer additive animation from small translation magnitudes.
+        return mot.Header.version == MotVersion.OniWS &&
+            (mot.Header.motName.Contains("_face_", StringComparison.OrdinalIgnoreCase) ||
+             mot.Header.motName.EndsWith("_face", StringComparison.OrdinalIgnoreCase)) &&
+            boneName != null &&
+            (boneName.StartsWith("face_joint", StringComparison.OrdinalIgnoreCase) ||
+             boneName.StartsWith("tongue", StringComparison.OrdinalIgnoreCase) ||
+             boneName.StartsWith("eye_", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("jaw", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("teeth_base", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AddAnimationBones(ViewportMesh mesh, IReadOnlyList<MotBone> motionBones)
