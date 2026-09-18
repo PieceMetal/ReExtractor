@@ -37,7 +37,7 @@ public sealed class AnimationService
             $"001_{SafeName(stem)}_motion{motionIndex:D3}_id{motion.motNumber}.glb");
         var boneNames = skeletonMesh.Bones.Select(bone => bone.Name).ToArray();
         var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
-            (int)mot.Header.version == 892);
+            (int)mot.Header.version == 892, motlistPath);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
         new ViewportExportService().ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
         progress?.Invoke(1, 1);
@@ -68,7 +68,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             var outputPath = Path.Combine(outputDirectory,
                 $"{outputs.Count + 1:D3}_{SafeName(stem)}_motion{index:D3}_id{motion.motNumber}.glb");
             var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
-                (int)mot.Header.version == 892);
+                (int)mot.Header.version == 892, motlistPath);
             exporter.ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
             outputs.Add(outputPath);
             progress?.Invoke(outputs.Count, exportableCount);
@@ -98,7 +98,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             if (motion.MotFile is not MotFile mot) continue;
             var outputPath = Path.Combine(outputDirectory,
                 $"{outputs.Count + 1:D3}_{SafeName(stem)}_动作{index:D3}_编号{motion.motNumber}.glb");
-            WriteMotionGlb(mesh, mot, motion.motNumber, outputPath);
+            WriteMotionGlb(mesh, mot, motion.motNumber, outputPath, motlistPath);
             outputs.Add(outputPath);
             progress?.Invoke(outputs.Count, exportableCount);
         }
@@ -123,10 +123,10 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         if (motion.MotFile is not MotFile mot)
             throw new NotSupportedException("Motion has no embedded .mot data (external mot link not supported yet)");
 
-        return WriteMotionGlb(mesh, mot, motion.motNumber, outputPath);
+        return WriteMotionGlb(mesh, mot, motion.motNumber, outputPath, motlistPath);
     }
 
-    private static string WriteMotionGlb(MeshFile mesh, MotFile mot, int motionNumber, string outputPath)
+    private static string WriteMotionGlb(MeshFile mesh, MotFile mot, int motionNumber, string outputPath, string motlistPath)
     {
         var scene = new SceneBuilder();
         var skeleton = MeshService.BuildSkeletonInternal(mesh.BoneData);
@@ -139,7 +139,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             var node = ResolveBoneNode(skeleton, mesh, clip);
             if (node == null) continue;
             var binding = node.LocalMatrix;
-            var poseTrack = new BoneTrack { IsAdditive = ViewportDataLoader.UsesAdditiveFaceTrack(mot, node.Name) };
+            var poseTrack = new BoneTrack { IsAdditive = ViewportDataLoader.UsesAdditiveFaceTrack(mot, node.Name, motlistPath) };
 
             if (clip.HasRotation && clip.Rotation!.rotations is { Length: > 0 } rotations)
             {
@@ -190,7 +190,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         int motionNumber,
         IReadOnlyList<string> meshBoneNames,
         ViewportMesh skeletonMesh,
-        bool usesReferencePoseTracks)
+        bool usesReferencePoseTracks, string motlistPath)
     {
         var hashToBone = new Dictionary<uint, (int Index, string Name)>(meshBoneNames.Count);
         for (var i = 0; i < meshBoneNames.Count; i++)
@@ -218,7 +218,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                 target = (fallbackIndex, meshBoneNames[fallbackIndex]);
             }
 
-            var track = new BoneTrack { IsAdditive = ViewportDataLoader.UsesAdditiveFaceTrack(mot, target.Name) };
+            var track = new BoneTrack { IsAdditive = ViewportDataLoader.UsesAdditiveFaceTrack(mot, target.Name, motlistPath) };
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } translations)
             {
                 var fps = TrackFrameRate(clip.Translation);
@@ -297,8 +297,11 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         if (header.boneHash != 0)
             bone = hierarchy.GetByHash(header.boneHash);
 
-        // 2) fall back to bone index into the mesh bone list
-        bone ??= hierarchy.GetByIndex(header.boneIndex);
+        // A nonzero hash identifies a specific bone. MOT-only facial helpers
+        // are absent from some mesh parts; falling back by index then animates
+        // an unrelated shoulder/face bone. Match the preview/export-clip path.
+        if (header.boneHash != 0 && bone == null) return null;
+        if (header.boneHash == 0) bone = hierarchy.GetByIndex(header.boneIndex);
 
         if (bone == null || bone.index < 0 || bone.index >= skeleton.AllNodes.Length) return null;
         return skeleton.AllNodes[bone.index];

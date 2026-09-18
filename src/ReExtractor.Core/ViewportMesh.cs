@@ -1860,7 +1860,7 @@ public static class ViewportDataLoader
                     boneName = targetBoneNames[fallbackIndex];
                 }
             }
-            var track = new BoneTrack { IsAdditive = UsesAdditiveFaceTrack(mot, boneName ?? clip.ClipHeader.boneName) };
+            var track = new BoneTrack { IsAdditive = UsesAdditiveFaceTrack(mot, boneName ?? clip.ClipHeader.boneName, motlistPath) };
 
             if (clip.HasTranslation && clip.Translation!.translations is { Length: > 0 } tr)
             {
@@ -2459,20 +2459,84 @@ public static class ViewportDataLoader
         return NormalizeOrIdentity(new Quaternion(cross, 1f + dot));
     }
 
-    internal static bool UsesAdditiveFaceTrack(MotFile mot, string? boneName)
+    internal static bool UsesAdditiveFaceTrack(MotFile mot, string? boneName, string? motlistPath = null)
     {
-        // OniWS cutscene face motions contain local deltas, unlike body motions.
+        // OniWS cinematic and dialogue face motions contain local deltas.
+        // Dialogue body/face files can have identical motion names; use the face
+        // resource directory as well as the cinematic naming convention.
         // bsControl channels are blend-shape parameters, not skeletal deltas.
         // Do not infer additive animation from small translation magnitudes.
         return mot.Header.version == MotVersion.OniWS &&
+            // Enemy face folders also contain absolute player-reaction clips.
+            !mot.Header.motName.StartsWith("plw_", StringComparison.OrdinalIgnoreCase) &&
             (mot.Header.motName.Contains("_face_", StringComparison.OrdinalIgnoreCase) ||
-             mot.Header.motName.EndsWith("_face", StringComparison.OrdinalIgnoreCase)) &&
+             mot.Header.motName.EndsWith("_face", StringComparison.OrdinalIgnoreCase) ||
+             motlistPath?.Replace('\\', '/').Contains("/face/", StringComparison.OrdinalIgnoreCase) == true) &&
             boneName != null &&
             (boneName.StartsWith("face_joint", StringComparison.OrdinalIgnoreCase) ||
              boneName.StartsWith("tongue", StringComparison.OrdinalIgnoreCase) ||
              boneName.StartsWith("eye_", StringComparison.OrdinalIgnoreCase) ||
              boneName.Equals("jaw", StringComparison.OrdinalIgnoreCase) ||
-             boneName.Equals("teeth_base", StringComparison.OrdinalIgnoreCase));
+             boneName.Equals("teeth_base", StringComparison.OrdinalIgnoreCase) ||
+             // OniWS NPC facial rigs (including ch004) use the LOD facial hierarchy.
+             boneName.StartsWith("LOD0_", StringComparison.OrdinalIgnoreCase) ||
+             boneName.StartsWith("LOD1_", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("Jaw_Jnt", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("UprTeeth_Jnt", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("LeftEye", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("RightEye", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("Skull", StringComparison.OrdinalIgnoreCase) ||
+             boneName.Equals("Facial_Root", StringComparison.OrdinalIgnoreCase) ||
+             boneName.StartsWith("HeadRX_HJ_", StringComparison.OrdinalIgnoreCase) ||
+             boneName.StartsWith("Neck_0_HJ_", StringComparison.OrdinalIgnoreCase) ||
+             boneName.StartsWith("Neck_1_HJ_", StringComparison.OrdinalIgnoreCase) ||
+             IsOniMultiEyeFaceTrack(mot, boneName) ||
+             IsOniEnemyFaceTrack(mot, boneName));
+    }
+
+    private static readonly HashSet<string> OniEnemyFaceStems = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "EyeBrow", "NoseBridge", "MongolianFold", "EyeDouble", "UpperEyelid", "LowerEyelid",
+        "InnerCornerEye", "CornerEye", "TearBag", "Jaw", "LipUnder", "LoLip", "Nose",
+        "Under", "UnderNose", "UpLip", "Upper", "Cheek", "Cheekfang", "Chine", "Dbl",
+        "JawGuard", "Lip", "LoLid", "MGL", "Naso", "NoseWrinker", "UpLid",
+        "Cf", "Ebs", "Llp", "Nb", "Nt", "sd", "Ulp", "UOom", "Cb", "Chin", "Chk",
+        "Ele", "Ell", "Elu", "Eye", "fceJnt", "Fh", "Jl", "Ll", "LpC", "Mf", "Mm",
+        "Nsf", "Nw", "OomL", "OomU", "ULpcorn", "temple", "beard"
+    };
+
+    private static bool IsOniEnemyFaceTrack(MotFile mot, string boneName)
+    {
+        // Verified alternative facial rigs: em510 (brows), em512/em513 (jaw,
+        // lips and mask), em507 (abbreviated muscles). Do not classify arbitrary
+        // L_/R_ body bones or the absolute CCf and hair-chain helper tracks.
+        var stem = boneName.Length > 2 && boneName[1] == '_' &&
+            (boneName[0] is 'C' or 'L' or 'R' or 'S') ? boneName.Split('_')[1] : "";
+        var candidate = OniEnemyFaceStems.Contains(stem) ||
+            boneName is "Left_Eye" or "Right_Eye" or "Lower_Mask" or "Upper_Mask" or "Upper_Teeth" or "Head";
+        if (!candidate) return false;
+        var abbreviatedRig = mot.Bones.Any(b => b.boneName == "C_UOom");
+        if (boneName == "Head") return abbreviatedRig;
+        return abbreviatedRig || mot.Bones.Any(b => b.boneName is "C_NoseBridge" or "C_LipUnder");
+    }
+
+    private static bool IsOniMultiEyeFaceTrack(MotFile mot, string boneName)
+    {
+        // The multi-eye facial rig has its own eye/lid and mouth hierarchy.
+        // R_Eye/L_Eye alone are NOT sufficient: ordinary NPC motions also use
+        // those names for absolute helper tracks (for example npc021).
+        var isMultiEyeBone = boneName.StartsWith("L_Eye", StringComparison.OrdinalIgnoreCase) ||
+               boneName.StartsWith("R_Eye", StringComparison.OrdinalIgnoreCase) ||
+               boneName.StartsWith("Front_Eye", StringComparison.OrdinalIgnoreCase) ||
+               boneName.StartsWith("LeftEye", StringComparison.OrdinalIgnoreCase) ||
+               boneName.StartsWith("RightEye", StringComparison.OrdinalIgnoreCase) ||
+               boneName.Equals("FrontEye", StringComparison.OrdinalIgnoreCase) ||
+               boneName.StartsWith("L_Mouth_Corner_", StringComparison.OrdinalIgnoreCase) ||
+               boneName.StartsWith("R_Mouth_Corner_", StringComparison.OrdinalIgnoreCase) ||
+               boneName.Equals("L_masseter_muscle", StringComparison.OrdinalIgnoreCase) ||
+               boneName.Equals("R_masseter_muscle", StringComparison.OrdinalIgnoreCase);
+        return isMultiEyeBone && mot.Bones.Any(bone =>
+            bone.boneName.Equals("Front_Eye", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AddAnimationBones(ViewportMesh mesh, IReadOnlyList<MotBone> motionBones)
