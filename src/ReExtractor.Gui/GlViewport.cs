@@ -1826,9 +1826,13 @@ public sealed class GlViewport : OpenGlControlBase
         if (computed[b]) return;
 
         var bone = model.Mesh.Bones[b];
-        if (primaryByName.TryGetValue(bone.Name, out var primaryIndex))
+        if (primaryByName.TryGetValue(bone.Name, out var primaryIndex) &&
+            !primary.Mesh.Bones[primaryIndex].IsMotionHelper &&
+            !(model.Tracks?.TryGetValue(b, out var localTrack) == true && localTrack.IsAdditive))
         {
-            // The primary model owns the authoritative animated hierarchy.  This is
+            // Only source mesh bones can drive another part. MOT-only helpers have no
+            // authoritative bind pose; additive tracks must use each part's own bind.
+            // The primary model owns the remaining animated hierarchy. This is
             // what keeps a partial head/hair/body overlay on the same neck/root pose.
             model.BoneGlobals[b] = primary.BoneGlobals[primaryIndex];
             computed[b] = true;

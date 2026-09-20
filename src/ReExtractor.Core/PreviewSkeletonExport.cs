@@ -43,7 +43,11 @@ internal static class PreviewSkeletonExport
             {
                 var source = mesh.Bones[b];
                 if (ReferenceEquals(mesh, driver)) map[b] = b;
-                else if (driverNames.TryGetValue(source.Name, out var common)) map[b] = common;
+                // A synthetic MOT helper or a different rest pose cannot own this part's bone.
+                // Keep an aliased animation target so additive keys resolve against its own bind.
+                else if (driverNames.TryGetValue(source.Name, out var common) &&
+                    !driver.Bones[common].IsMotionHelper &&
+                    source.LocalBind == driver.Bones[common].LocalBind) map[b] = common;
                 else
                 {
                     map[b] = bones.Count;

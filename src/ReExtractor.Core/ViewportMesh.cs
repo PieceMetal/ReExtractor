@@ -550,6 +550,7 @@ public sealed class ViewportTexture
 
 public sealed class ViewportBone
 {
+    public bool IsMotionHelper; // Appended MOT bone; not an authoritative mesh bind pose.
     public required string Name;
     public required int ParentIndex;                 // -1 for root
     public required Matrix4x4 LocalBind;
@@ -2577,6 +2578,7 @@ public static class ViewportDataLoader
             mesh.Bones[index] = new ViewportBone
             {
                 Name = source.boneName,
+                IsMotionHelper = true,
                 ParentIndex = parentIndex,
                 LocalBind = local,
                 InverseGlobalBind = Matrix4x4.Identity,

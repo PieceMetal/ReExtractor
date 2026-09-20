@@ -533,7 +533,9 @@ public sealed class Viewport3D : Control
         if (computed[b]) return;
 
         var bone = extra.Mesh.Bones[b];
-        if (_boneGlobals != null && primaryByName.TryGetValue(bone.Name, out var primaryIndex))
+        if (_boneGlobals != null && primaryByName.TryGetValue(bone.Name, out var primaryIndex) &&
+            _mesh != null && !_mesh.Bones[primaryIndex].IsMotionHelper &&
+            !(extra.RemappedTracks?.TryGetValue(b, out var localTrack) == true && localTrack.IsAdditive))
         {
             // _boneGlobals was evaluated for the primary mesh immediately before
             // extras in EvaluatePose, so this is the authoritative animated global.
