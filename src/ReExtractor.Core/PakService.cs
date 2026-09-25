@@ -35,6 +35,8 @@ public sealed class PakService
     public void AddPak(string pakPath)
     {
         if (!File.Exists(pakPath)) throw new FileNotFoundException("PAK not found", pakPath);
+        if (new FileInfo(pakPath).Length == 0)
+            throw new InvalidDataException($"PAK file is empty: {pakPath}");
         _pakFiles.Add(pakPath);
         _pakEntrySources.Clear();
         _pakEntryIndexReady = false;
@@ -70,6 +72,7 @@ public sealed class PakService
     public int AddPaksFromGameDir(string gameDir)
     {
         var paks = Directory.GetFiles(gameDir, "*.pak")
+            .Where(path => new FileInfo(path).Length > 0)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
         foreach (var pak in paks) AddPak(pak);

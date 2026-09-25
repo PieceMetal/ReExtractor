@@ -838,7 +838,8 @@ public partial class MainWindow : Window
     private static IEnumerable<string> FindPakFiles(string root)
     {
         foreach (var pak in EnumerateFilesShallow(root, "*.pak", 4))
-            yield return pak;
+            if (new FileInfo(pak).Length > 0)
+                yield return pak;
     }
 
     private static string FormatByteSize(long bytes)
@@ -1219,7 +1220,8 @@ public partial class MainWindow : Window
         {
             if (string.IsNullOrWhiteSpace(group.Key) || !Directory.Exists(group.Key)) continue;
             foreach (var sibling in Directory.EnumerateFiles(group.Key, "*.pak", SearchOption.TopDirectoryOnly))
-                yield return sibling;
+                if (new FileInfo(sibling).Length > 0)
+                    yield return sibling;
         }
     }
     private async Task LoadPakFilesAsync(IEnumerable<string> pakPaths)
@@ -1245,6 +1247,8 @@ public partial class MainWindow : Window
                 p.LoadListFile(listFile);
                 var list = p.EnumerateFiles()
                     .Select(file => new EntryRow(file.Path, file.DecompressedSize, file.SourcePak)).ToList();
+                if (list.Count == 0)
+                    throw new InvalidDataException("没有找到与当前路径列表匹配的资源，请检查游戏版本与 .list 版本");
                 return (p, list, BuildTree(list));
             });
 
@@ -1266,6 +1270,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             StatusText.Text = "加载失败：" + ex.Message;
+            ActionStatus.Text = "PAK 加载失败：" + ex.Message;
         }
         finally
         {
