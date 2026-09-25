@@ -128,6 +128,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
 
     private static string WriteMotionGlb(MeshFile mesh, MotFile mot, int motionNumber, string outputPath, string motlistPath)
     {
+        MotionSkeletonCompatibility.Validate(mot, mesh.BoneData);
         var scene = new SceneBuilder();
         var skeleton = MeshService.BuildSkeletonInternal(mesh.BoneData);
         MeshService.ExportGeometry(scene, mesh, skeleton, lodIndex: 0);
@@ -169,6 +170,15 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                 node.WithLocalTranslation(animName, keys);
             }
 
+            if (mot.Header.version == MotVersion.RE_RT &&
+                clip.HasScale && clip.Scale!.translations is { Length: > 0 } scales)
+            {
+                var fps = TrackFrameRate(clip.Scale);
+                var times = BuildTimes(clip.Scale.frameIndexes, scales.Length, fps);
+                var keys = new Dictionary<float, Vector3>(scales.Length);
+                for (var i = 0; i < scales.Length; i++) keys[times[i]] = scales[i];
+                node.WithLocalScale(animName, keys);
+            }
             applied++;
         }
 
@@ -192,6 +202,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         ViewportMesh skeletonMesh,
         bool usesReferencePoseTracks, string motlistPath)
     {
+        MotionSkeletonCompatibility.Validate(mot, skeletonMesh);
         var hashToBone = new Dictionary<uint, (int Index, string Name)>(meshBoneNames.Count);
         for (var i = 0; i < meshBoneNames.Count; i++)
         {
@@ -247,6 +258,17 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                 duration = Math.Max(duration, maxFrame / fps);
             }
 
+            if (mot.Header.version == MotVersion.RE_RT &&
+                clip.HasScale && clip.Scale!.translations is { Length: > 0 } scales)
+            {
+                var fps = TrackFrameRate(clip.Scale);
+                var maxFrame = TrackMaxFrame(clip.Scale, scales.Length);
+                track.ScaleTimes = BuildTimes(clip.Scale.frameIndexes, scales.Length, fps);
+                track.Scales = scales;
+                sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
+                sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
+                duration = Math.Max(duration, maxFrame / fps);
+            }
             tracks[target.Index] = track;
             namedTracks[target.Name] = track;
         }

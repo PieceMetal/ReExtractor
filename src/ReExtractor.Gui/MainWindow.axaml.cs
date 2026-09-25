@@ -1681,6 +1681,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     // ---- viewport toolbar: skeleton / motion / timeline ----
 
     private string? _currentMotlistPath;
+    private int _loadedMotionComboIndex = -1;
     private int[] _currentMotionIndices = [];
     private bool _suppressSlider;
     private bool _syncingMotionUi;
@@ -2243,6 +2244,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if ((uint)comboIndex >= (uint)_currentMotionIndices.Length) return;
         var idx = _currentMotionIndices[comboIndex];
         var motlistPath = _currentMotlistPath;
+        var operation = ++_previewSeq;
         var sceneMeshes = Viewport.SceneMeshes;
         var meshBoneNames = Viewport.AllMeshBoneNames;
         try
@@ -2252,14 +2254,20 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 using var motMs = _pak.ReadFile(motlistPath);
                 var clip = ViewportDataLoader.LoadAnimation(motMs, motlistPath, idx,
                     meshBoneNames, sceneMeshes);
-                return PreviewOriginNormalizer.CenterRootAtBindOrigin(clip, sceneMeshes);
+                return clip;
             });
+            if (operation != _previewSeq) return;
             Viewport.SetAnimation(clip);
+            _loadedMotionComboIndex = comboIndex;
             ShowTimeline(clip.Duration);
             ActionStatus.Text = $"动画播放中: {clip.Name}（时长 {clip.Duration:F1}s）";
         }
         catch (Exception ex)
         {
+            if (operation != _previewSeq) return;
+            _syncingMotionUi = true;
+            MotionCombo.SelectedIndex = _loadedMotionComboIndex;
+            _syncingMotionUi = false;
             ActionStatus.Text = "动作加载失败：" + ex.Message;
         }
     }
@@ -2278,13 +2286,14 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var clip = ViewportDataLoader.LoadAnimation(motionStream, path,
                 motions[Math.Clamp(index, 0, motions.Count - 1)].SourceIndex,
                 meshBoneNames, sceneMeshes);
-            return (PreviewOriginNormalizer.CenterRootAtBindOrigin(clip, sceneMeshes), motions);
+            return (clip, motions);
         });
     }
 
     private void SetMotionListUi(string path, IReadOnlyList<MotionInfo> motions, int selectedIndex)
     {
         _currentMotlistPath = path;
+        _loadedMotionComboIndex = selectedIndex;
         _currentMotionIndices = motions.Select(motion => motion.SourceIndex).ToArray();
         _syncingMotionUi = true;
         MotionCombo.ItemsSource = motions.Select(motion => motion.DisplayName).ToArray();
@@ -2297,6 +2306,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void ClearMotionState()
     {
         _currentMotlistPath = null;
+        _loadedMotionComboIndex = -1;
         _currentMotionIndices = [];
         _syncingMotionUi = true;
         MotionCombo.ItemsSource = null;

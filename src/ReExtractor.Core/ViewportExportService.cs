@@ -221,6 +221,15 @@ public sealed class ViewportExportService
 
             var binding = node.LocalMatrix;
 
+            if (track.ScaleTimes is { Length: > 0 } scaleTimes &&
+                track.Scales is { Length: > 0 } scales)
+            {
+                var keys = new Dictionary<float, Vector3>(Math.Min(scaleTimes.Length, scales.Length));
+                for (var k = 0; k < scaleTimes.Length && k < scales.Length; k++)
+                    keys[scaleTimes[k]] = scales[k];
+                node.WithLocalScale(animName, keys);
+            }
+
             if (track.RotTimes is { Length: > 0 } rotTimes &&
                 track.Rotations is { Length: > 0 } rotations)
             {

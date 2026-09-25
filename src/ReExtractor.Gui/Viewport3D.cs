@@ -593,6 +593,8 @@ public sealed class Viewport3D : Control
             pos = track.ResolveTranslation(Sample(tr, track.TransTimes, time), bindLocal);
         if (track.Rotations is { Length: > 0 } ro && track.RotTimes != null)
             rot = track.ResolveRotation(Sample(ro, track.RotTimes, time), bindLocal);
+        if (track.Scales is { Length: > 0 } scales && track.ScaleTimes != null)
+            scale = Sample(scales, track.ScaleTimes, time);
 
         return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rot) * Matrix4x4.CreateTranslation(pos);
     }

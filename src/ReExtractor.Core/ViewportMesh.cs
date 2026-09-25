@@ -581,6 +581,8 @@ public sealed class BoneTrack
     public Vector3[]? Translations;
     public float[]? RotTimes;
     public Quaternion[]? Rotations;
+    public float[]? ScaleTimes;
+    public Vector3[]? Scales;
 }
 
 /// <summary>One embedded, directly readable motion in a MotionList.</summary>
@@ -1804,6 +1806,12 @@ public static class ViewportDataLoader
             throw new NotSupportedException("Motion has no embedded .mot data");
         var usesReferencePoseTracks = (int)mot.Header.version == 892;
 
+        // Validate before appending helper bones: adding MOT bones must not make
+        // an unrelated face/weapon skeleton appear compatible with the model.
+        var poseDriver = sceneMeshes?.OrderByDescending(mesh => mesh.DeformToBone.Length)
+            .ThenByDescending(mesh => mesh.VertexCount).FirstOrDefault();
+        if (poseDriver != null) MotionSkeletonCompatibility.Validate(mot, poseDriver);
+
         // Noesis adds bones that exist in the MOT header but are absent from
         // an individual mesh part before it builds the keyframe animation.
         // MH Wilds stores leg/hand IK and helper bones this way. Keep the
@@ -1882,6 +1890,19 @@ public static class ViewportDataLoader
                 track.RotTimes = BuildTimes(frames, ro.Length, fps);
                 track.Rotations = ro.Select(q => q.W < 0 ? new Quaternion(-q.X, -q.Y, -q.Z, -q.W) : q)
                                     .Select(Quaternion.Normalize).ToArray();
+                sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
+                sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
+                duration = Math.Max(duration, maxFrame / fps);
+            }
+            // RE2 RT muscle/cloth helpers carry non-unit scale channels.
+            // Keep their native absolute local scale; dropping these changes skinning.
+            if (mot.Header.version == MotVersion.RE_RT &&
+                clip.HasScale && clip.Scale!.translations is { Length: > 0 } scales)
+            {
+                var fps = TrackFrameRate(clip.Scale);
+                var maxFrame = TrackMaxFrame(clip.Scale, scales.Length);
+                track.ScaleTimes = BuildTimes(clip.Scale.frameIndexes, scales.Length, fps);
+                track.Scales = scales;
                 sourceFrameRate = Math.Max(sourceFrameRate, (int)fps);
                 sourceFrameCount = Math.Max(sourceFrameCount, (int)MathF.Round(maxFrame));
                 duration = Math.Max(duration, maxFrame / fps);

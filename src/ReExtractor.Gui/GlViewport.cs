@@ -1915,7 +1915,9 @@ public sealed class GlViewport : OpenGlControlBase
 
             rot = track.ResolveRotation(Sample(ro, track.RotTimes, time), bindLocal);
 
-        return Matrix4x4.CreateScale(Vector3.One) * Matrix4x4.CreateFromQuaternion(rot) * Matrix4x4.CreateTranslation(pos);
+        var scale = track.Scales is { Length: > 0 } values && track.ScaleTimes != null
+            ? Sample(values, track.ScaleTimes, time) : Vector3.One;
+        return Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rot) * Matrix4x4.CreateTranslation(pos);
 
     }
 
