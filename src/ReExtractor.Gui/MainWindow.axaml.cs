@@ -2250,8 +2250,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var clip = await Task.Run(() =>
             {
                 using var motMs = _pak.ReadFile(motlistPath);
-                return ViewportDataLoader.LoadAnimation(motMs, motlistPath, idx,
+                var clip = ViewportDataLoader.LoadAnimation(motMs, motlistPath, idx,
                     meshBoneNames, sceneMeshes);
+                return PreviewOriginNormalizer.CenterRootAtBindOrigin(clip, sceneMeshes);
             });
             Viewport.SetAnimation(clip);
             ShowTimeline(clip.Duration);
@@ -2277,7 +2278,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var clip = ViewportDataLoader.LoadAnimation(motionStream, path,
                 motions[Math.Clamp(index, 0, motions.Count - 1)].SourceIndex,
                 meshBoneNames, sceneMeshes);
-            return (clip, motions);
+            return (PreviewOriginNormalizer.CenterRootAtBindOrigin(clip, sceneMeshes), motions);
         });
     }
 
