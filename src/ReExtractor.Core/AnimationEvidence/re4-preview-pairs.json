@@ -1,0 +1,574 @@
+[
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 140,
+    "AdditiveId": 141,
+    "BaseName": "cha0_wp4000H_0140_hold_start",
+    "AdditiveName": "cha0_wp4000H_0141_hold_start_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "ch0_140_HOLD_START",
+        "NodeId": "915912909 (0)",
+        "Parents": [
+          "root",
+          "HoldStart",
+          "ch0_140_HOLD_START"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "ch0_140_HOLD_START",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 156,
+    "AdditiveId": 157,
+    "BaseName": "cha0_wp4000H_0156_hold_end_slow",
+    "AdditiveName": "cha0_wp4000H_0157_hold_end_slow_add",
+    "BaseMaskId": 10,
+    "AdditiveMaskId": 11,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4000H_0156_hold_end_slow_UPPERBODY",
+        "NodeId": "3476414412 (0)",
+        "Parents": [
+          "root",
+          "IDLE",
+          "IDLE",
+          "HOLD_END",
+          "wp4000H_0156_hold_end_slow_UPPERBODY"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "wp4000H_0156_hold_end_slow_UPPERBODY",
+            "Layer": 4,
+            "Mask": 10
+          },
+          {
+            "Node": "wp4000H_0156_hold_end_slow_UPPERBODY",
+            "Layer": 3,
+            "Mask": 11
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 158,
+    "AdditiveId": 159,
+    "BaseName": "cha0_wp4000H_0158_hold_end",
+    "AdditiveName": "cha0_wp4000H_0159_hold_end_add",
+    "BaseMaskId": 10,
+    "AdditiveMaskId": 11,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "ch0_158_HOLD_END_UPPERBODY",
+        "NodeId": "75542790 (0)",
+        "Parents": [
+          "root",
+          "IDLE",
+          "IDLE",
+          "HOLD_END",
+          "ch0_158_HOLD_END_UPPERBODY"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "ch0_158_HOLD_END_UPPERBODY",
+            "Layer": 4,
+            "Mask": 10
+          },
+          {
+            "Node": "ch0_158_HOLD_END_UPPERBODY",
+            "Layer": 3,
+            "Mask": 11
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 541,
+    "AdditiveId": 542,
+    "BaseName": "cha0_wp4000H_0541_put_out",
+    "AdditiveName": "cha0_wp4000H_0542_put_out_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 4,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "ch0_541_PUT_OUT",
+        "NodeId": "959897956 (0)",
+        "Parents": [
+          "root",
+          "ChangeWeapon",
+          "ch0_541_PUT_OUT"
+        ],
+        "MaskOverrides": []
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 543,
+    "AdditiveId": 544,
+    "BaseName": "cha0_wp4000H_0543_put_out",
+    "AdditiveName": "cha0_wp4000H_0544_put_out_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 4,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "ch0_541_PUT_OUT",
+        "NodeId": "959897956 (0)",
+        "Parents": [
+          "root",
+          "ChangeWeapon",
+          "ch0_541_PUT_OUT"
+        ],
+        "MaskOverrides": []
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 551,
+    "AdditiveId": 552,
+    "BaseName": "cha0_wp4000H_0551_put_away",
+    "AdditiveName": "cha0_wp4000H_0552_put_away_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 4,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4000H_0551_put_away",
+        "NodeId": "2618862575 (0)",
+        "Parents": [
+          "root",
+          "ChangeWeapon",
+          "wp4000H_0551_put_away"
+        ],
+        "MaskOverrides": []
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 805,
+    "AdditiveId": 806,
+    "BaseName": "cha0_wp4100H_0805_reload_start",
+    "AdditiveName": "cha0_wp4100H_0806_reload_start_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4100H_0805_reload_lv1_start",
+        "NodeId": "2582639230 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "wp4100H_0805_reload_lv1_start",
+          "wp4100H_0805_reload_lv1_start"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 810,
+    "AdditiveId": 811,
+    "BaseName": "cha0_wp4000H_0810_reload",
+    "AdditiveName": "cha0_wp4000H_0811_reload_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4100H_0810_reload_lv1_loop",
+        "NodeId": "372977239 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "wp4100H_0810_reload_lv1_loop",
+          "wp4100H_0810_reload_lv1_loop"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      },
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "ch0_810_RELOAD",
+        "NodeId": "3140235809 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "ch0_810_RELOAD",
+          "ch0_810_RELOAD",
+          "ch0_810_RELOAD"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 815,
+    "AdditiveId": 816,
+    "BaseName": "cha0_wp4100H_0815_reload_end",
+    "AdditiveName": "cha0_wp4100H_0816_reload_end_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4100H_0815_reload_lv1_end",
+        "NodeId": "3019667117 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "wp4100H_0815_reload_lv1_end",
+          "wp4100H_0815_reload_lv1_end"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 817,
+    "AdditiveId": 818,
+    "BaseName": "cha0_wp4100H_0817_reload_end",
+    "AdditiveName": "cha0_wp4100H_0818_reload_end_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "noempty_reload_end",
+        "NodeId": "1908155116 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "noempty_reload_end",
+          "noempty_reload_end"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 850,
+    "AdditiveId": 851,
+    "BaseName": "cha0_wp4600H_0850_set_explosive",
+    "AdditiveName": "cha0_wp4600H_0851_set_explosive_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "EquipMineSocket",
+        "NodeId": "224357997 (0)",
+        "Parents": [
+          "root",
+          "EquipMineSocket",
+          "EquipMineSocket"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "EquipMineSocket",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 910,
+    "AdditiveId": 911,
+    "BaseName": "cha0_wp4000H_0910_reload_tac",
+    "AdditiveName": "cha0_wp4000H_0911_reload_tac_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "TACTICAL_RELOAD",
+        "NodeId": "3066411444 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "ch0_810_RELOAD",
+          "TACTICAL_RELOAD",
+          "TACTICAL_RELOAD"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 1805,
+    "AdditiveId": 1806,
+    "BaseName": "cha0_wp4100H_1805_reload_start",
+    "AdditiveName": "cha0_wp4100H_1806_reload_start_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4100H_1805_reload_lv1_start",
+        "NodeId": "4132417559 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "wp4100H_0805_reload_lv1_start",
+          "wp4100H_1805_reload_lv1_start"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 1810,
+    "AdditiveId": 1811,
+    "BaseName": "cha0_wp4000H_1810_reload",
+    "AdditiveName": "cha0_wp4000H_1811_reload_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4100H_1810_reload_lv1_loop",
+        "NodeId": "437086593 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "wp4100H_0810_reload_lv1_loop",
+          "wp4100H_1810_reload_lv1_loop"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      },
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "ch0_1810_RELOAD",
+        "NodeId": "3828994755 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "ch0_810_RELOAD",
+          "ch0_810_RELOAD",
+          "ch0_1810_RELOAD"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 1815,
+    "AdditiveId": 1816,
+    "BaseName": "cha0_wp4100H_1815_reload_end",
+    "AdditiveName": "cha0_wp4100H_1816_reload_end_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "wp4100H_1815_reload_lv1_end",
+        "NodeId": "1221259998 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "wp4100H_0815_reload_lv1_end",
+          "wp4100H_1815_reload_lv1_end"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 1817,
+    "AdditiveId": 1818,
+    "BaseName": "cha0_wp4100H_1817_reload_end",
+    "AdditiveName": "cha0_wp4100H_1818_reload_end_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "crouch_noempty_reload_end",
+        "NodeId": "3956464787 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "noempty_reload_end",
+          "crouch_noempty_reload_end"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663",
+    "BaseId": 1910,
+    "AdditiveId": 1911,
+    "BaseName": "cha0_wp4000H_1910_reload_tac",
+    "AdditiveName": "cha0_wp4000H_1911_reload_tac_add",
+    "BaseMaskId": 3,
+    "AdditiveMaskId": 14,
+    "Evidence": [
+      {
+        "BankFile": "natives/stm/_chainsaw/animation/ch/cha0/motbank/cha0_wp4000.motbank.3",
+        "BankId": 2000,
+        "Fsm": "natives/stm/_chainsaw/appsystem/character/ch0common/motion/fsm/ch0commonupperbody.motfsm2.43",
+        "Node": "CROUCH_TACTICAL_RELOAD",
+        "NodeId": "130725599 (0)",
+        "Parents": [
+          "root",
+          "Reload",
+          "RELOAD_STAND",
+          "ch0_810_RELOAD",
+          "TACTICAL_RELOAD",
+          "CROUCH_TACTICAL_RELOAD"
+        ],
+        "MaskOverrides": [
+          {
+            "Node": "Reload",
+            "Layer": 3,
+            "Mask": 14
+          }
+        ]
+      }
+    ]
+  }
+]

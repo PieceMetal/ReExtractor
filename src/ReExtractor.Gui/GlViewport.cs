@@ -515,20 +515,9 @@ public sealed class GlViewport : OpenGlControlBase
 
     private GlModel? GetPoseDriver()
     {
-        GlModel? driver = _primary;
-        foreach (var extra in _extras)
-        {
-            // Animation loading appends MOT-only helper bones to every part.  A partial
-            // face/hair skeleton can therefore end up with more total bones than the
-            // body and must not become the pose driver.  DeformToBone is the stable
-            // source-skin count; use geometry only as a deterministic tie-breaker.
-            if (driver == null ||
-                extra.Mesh.DeformToBone.Length > driver.Mesh.DeformToBone.Length ||
-                (extra.Mesh.DeformToBone.Length == driver.Mesh.DeformToBone.Length &&
-                 extra.Mesh.VertexCount > driver.Mesh.VertexCount))
-                driver = extra;
-        }
-        return driver;
+        var models = _primary == null ? _extras.ToArray() : new[] { _primary }.Concat(_extras).ToArray();
+        var mesh = AnimationSkeleton.SelectDriver(models.Select(m => m.Mesh).ToArray());
+        return models.FirstOrDefault(m => ReferenceEquals(m.Mesh, mesh));
     }
 
     private void EvaluateAllPose(float time)

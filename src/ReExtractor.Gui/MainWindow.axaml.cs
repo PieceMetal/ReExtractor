@@ -207,6 +207,11 @@ public partial class MainWindow : Window
     {
         Opened += (_, _) => { if (Array.IndexOf(Environment.GetCommandLineArgs(), "--feedback") >= 0) SetFeedbackVisible(true); };
         InitializeComponent();
+        AdvancedMotionOptions.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Expander.IsExpandedProperty && !AdvancedMotionOptions.IsExpanded && !HasOnlyAdditiveTracks)
+                ShowRawMotionTracks.IsChecked = false;
+        };
         FeedbackSidebar.CloseRequested += () => SetFeedbackVisible(false);
         FeedbackSidebar.CurrentLogProvider = () => RunLogBox.Text ?? "";
         var displayVersion = _updateService.CurrentVersion.ToString(3);
@@ -264,6 +269,13 @@ public partial class MainWindow : Window
         AppendLog("工具已启动，请选择路径列表并加载 PAK");
         Opened += async (_, _) =>
         {
+            var args = Environment.GetCommandLineArgs();
+            var sessionIndex = Array.IndexOf(args, "--preview-session");
+            if (sessionIndex >= 0 && sessionIndex + 1 < args.Length)
+            {
+                await LoadPreviewSessionAsync(args[sessionIndex + 1]);
+                return;
+            }
             await ShowEnvironmentWindowAsync();
             await CheckForUpdatesAsync(false);
         };
@@ -1655,8 +1667,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     ShowViewport();
                     Viewport.SetAnimation(clip);
                     SetMotionListUi(path, motionNames, 0);
-                    ShowTimeline(clip.Duration);
-                    ActionStatus.Text = $"动画播放中：{clip.Name}（时长 {clip.Duration:F1} 秒，{clip.NamedTracks.Count} 条骨骼轨道）";
+                    await LoadSelectedMotionAsync(null);
                     break;
                 }
                 default:
@@ -2237,37 +2248,191 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         TimelineText.Text = FormatTimelineText(Viewport.CurrentTime, Viewport.Duration, Viewport.AnimationFrameRate, Viewport.AnimationFrameCount);
     }
 
-    private async void OnMotionChanged(object? sender, SelectionChangedEventArgs e)
+    private int _previewRequest;
+    private IReadOnlyList<MotionInfo> _previewMotions = Array.Empty<MotionInfo>();
+    private IReadOnlyList<MotionInfo> _visiblePreviewMotions = Array.Empty<MotionInfo>();
+    private IReadOnlyList<MotionInfo> _relatedPreviewMotions = Array.Empty<MotionInfo>();
+    private IReadOnlyList<AnimationLayerCandidate> _layerCandidates = Array.Empty<AnimationLayerCandidate>();
+    private IReadOnlyList<AnimationLayerPair>? _previewLayerPairs;
+    private bool IsRe4Preview => _currentMotlistPath?.Contains("/_chainsaw/animation/", StringComparison.OrdinalIgnoreCase) == true
+        && _currentMotlistPath.EndsWith(".motlist.663", StringComparison.OrdinalIgnoreCase);
+    private bool HasOnlyAdditiveTracks => IsRe4Preview && _previewMotions.Count > 0
+        && _previewMotions.All(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs));
+    private MotionInfo? SelectedBaseMotion => (uint)MotionCombo.SelectedIndex < (uint)_visiblePreviewMotions.Count
+        ? _visiblePreviewMotions[MotionCombo.SelectedIndex] : null;
+    private MotionInfo? SelectedAdditiveMotion => AdditiveMotionCombo.SelectedIndex > 0
+        && AdditiveMotionCombo.SelectedIndex <= _relatedPreviewMotions.Count
+        ? _relatedPreviewMotions[AdditiveMotionCombo.SelectedIndex - 1] : null;
+    private bool UseVerifiedReloadMask => _currentMotlistPath is { } path
+        && SelectedBaseMotion is { } basis && SelectedAdditiveMotion is { } overlay
+        && AnimationLayerCatalog.UsesReloadMask(path, basis.MotionNumber, overlay.MotionNumber, _previewLayerPairs);
+    private AnimationLayerProfile? SelectedLayerProfile => ShowRawMotionTracks.IsChecked != true
+        && _currentMotlistPath is { } path && SelectedBaseMotion is { } basis
+        ? AnimationLayerCatalog.GetProfile(path, basis.MotionNumber, SelectedAdditiveMotion?.MotionNumber, _previewLayerPairs) : null;
+    private bool IsConfirmedLayerPair => SelectedAdditiveMotion is { } selected
+        && _layerCandidates.Any(c => c.Motion.SourceIndex == selected.SourceIndex && c.Confirmed);
+
+    private void PopulatePreviewMotionChoices(int preferredSource)
     {
-        if (_syncingMotionUi || _pak == null || _currentMotlistPath == null || MotionCombo.SelectedIndex < 0) return;
-        var comboIndex = MotionCombo.SelectedIndex;
-        if ((uint)comboIndex >= (uint)_currentMotionIndices.Length) return;
-        var idx = _currentMotionIndices[comboIndex];
+        _visiblePreviewMotions = IsRe4Preview && ShowRawMotionTracks.IsChecked != true
+            ? _previewMotions.Where(m => !AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs)).ToArray()
+            : _previewMotions;
+        _currentMotionIndices = _visiblePreviewMotions.Select(m => m.SourceIndex).ToArray();
+        MotionCombo.ItemsSource = _visiblePreviewMotions.Select(m => m.DisplayName).ToArray();
+        var selected = _visiblePreviewMotions.ToList().FindIndex(m => m.SourceIndex == preferredSource);
+        MotionCombo.SelectedIndex = selected >= 0 ? selected : _visiblePreviewMotions.Count > 0 ? 0 : -1;
+        MotionLabel.Text = ShowRawMotionTracks.IsChecked != true ? "动作轨道" : "原始轨道";
+        ResetAdditiveChoices();
+    }
+
+    private void ResetAdditiveChoices()
+    {
+        AdditiveMotionCombo.IsEnabled = ShowRawMotionTracks.IsChecked != true;
+        _layerCandidates = IsRe4Preview && ShowRawMotionTracks.IsChecked != true && SelectedBaseMotion is { } basis
+            ? AnimationLayerCatalog.Find(_currentMotlistPath!, basis, _previewMotions, _previewLayerPairs)
+                .Where(c => c.Confirmed).ToArray() : Array.Empty<AnimationLayerCandidate>();
+        _relatedPreviewMotions = _layerCandidates.Select(c => c.Motion).ToArray();
+        var items = new List<ComboBoxItem> { new() { Content = "不叠加" } };
+        foreach (var candidate in _layerCandidates)
+        {
+            items.Add(new ComboBoxItem { Content = candidate.Motion.DisplayName, IsEnabled = true });
+        }
+        AdditiveMotionCombo.ItemsSource = items;
+        // Selecting a supported action previews its complete confirmed pair.
+        // The first item remains available for an explicit no-overlay comparison.
+        AdditiveMotionCombo.SelectedIndex = _relatedPreviewMotions.Count > 0 ? 1 : 0;
+        BlendWeightCombo.SelectedIndex = 2;
+        var adds = _previewMotions.Where(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs)).ToArray();
+        RawAdditiveInventory.Text = $"本资源列表的其他轨道（{adds.Length} 条）：\n"
+            + string.Join("\n", adds.Select(m => m.DisplayName));
+    }
+
+    private void UpdateBlendPreviewDescription()
+    {
+        var combined = SelectedAdditiveMotion != null;
+        BlendWeightPanel.IsVisible = combined;
+        BlendPreviewDescription.Text = combined
+            ? SelectedLayerProfile != null
+                ? "游戏配置配对预览：底层使用静态站姿，先应用附加层，再覆盖上半身主动作。强度仅调整附加层；未模拟移动、动态权重与 IK；导出保留原动作。"
+                : "手动叠加预览：局部增量、按原速同步，短轨道停在末帧。此组合的游戏层序未确认；导出保留原动作。"
+            : SelectedBaseMotion is { } raw && AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, raw, _previewLayerPairs)
+                ? "当前单独播放原始轨道。"
+                : _relatedPreviewMotions.Count > 0
+                    ? "附加列表仅显示游戏配置已确认的配对。当前未启用附加层；底层使用静态站姿，主动作控制上半身。"
+                    : "当前单独播放所选动作。";
+    }
+
+    private int _baseMotionBeforeRaw = -1;
+    private int _loadedMotionSource = -1;
+    private int _loadedAdditiveSource = -1;
+    private int _loadedWeightIndex = 2;
+    private bool _loadedRawMode;
+
+    private void RememberLoadedMotionUi()
+    {
+        _loadedMotionComboIndex = MotionCombo.SelectedIndex;
+        _loadedMotionSource = SelectedBaseMotion?.SourceIndex ?? -1;
+        _loadedAdditiveSource = SelectedAdditiveMotion?.SourceIndex ?? -1;
+        _loadedWeightIndex = BlendWeightCombo.SelectedIndex;
+        _loadedRawMode = ShowRawMotionTracks.IsChecked == true;
+    }
+
+    private void RestoreLoadedMotionUi()
+    {
+        _syncingMotionUi = true;
+        try
+        {
+            AdvancedMotionOptions.IsExpanded = _loadedRawMode;
+            ShowRawMotionTracks.IsChecked = _loadedRawMode;
+            PopulatePreviewMotionChoices(_loadedMotionSource);
+            AdditiveMotionCombo.SelectedIndex = _relatedPreviewMotions.ToList()
+                .FindIndex(m => m.SourceIndex == _loadedAdditiveSource) + 1;
+            BlendWeightCombo.SelectedIndex = _loadedWeightIndex;
+        }
+        finally { _syncingMotionUi = false; }
+        UpdateBlendPreviewDescription();
+    }
+
+    private void OnRawMotionTracksChanged(object? sender, RoutedEventArgs e)
+    {
+        if (_syncingMotionUi || _currentMotlistPath == null) return;
+        var preferred = SelectedBaseMotion?.SourceIndex ?? -1;
+        if (ShowRawMotionTracks.IsChecked == true)
+            _baseMotionBeforeRaw = preferred;
+        else if (_baseMotionBeforeRaw >= 0)
+            preferred = _baseMotionBeforeRaw;
+        _syncingMotionUi = true;
+        PopulatePreviewMotionChoices(preferred);
+        _syncingMotionUi = false;
+        UpdateBlendPreviewDescription();
+        OnMotionChanged(sender, new SelectionChangedEventArgs(ComboBox.SelectionChangedEvent, Array.Empty<object>(), Array.Empty<object>()));
+    }
+
+    private void OnBlendPreviewChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingMotionUi || BlendPreviewPanel?.IsVisible != true) return;
+        UpdateBlendPreviewDescription();
+        OnMotionChanged(sender, e);
+    }
+
+    private async void OnMotionChanged(object? sender, SelectionChangedEventArgs e)
+        => await LoadSelectedMotionAsync(sender);
+
+    private async Task LoadSelectedMotionAsync(object? sender)
+    {
+        if (_syncingMotionUi || _currentMotlistPath == null || SelectedBaseMotion is not { } selected) return;
+        if (ReferenceEquals(sender, MotionCombo))
+        {
+            _syncingMotionUi = true;
+            ResetAdditiveChoices();
+            _syncingMotionUi = false;
+            UpdateBlendPreviewDescription();
+        }
+        var request = ++_previewRequest;
+        if (_pak == null) return;
+        var layerProfile = SelectedLayerProfile;
+        var confirmedPair = IsConfirmedLayerPair;
+        var additiveSource = SelectedAdditiveMotion?.SourceIndex ?? -1;
+        var weight = BlendWeightCombo.SelectedIndex == 0 ? 0f : BlendWeightCombo.SelectedIndex == 1 ? .5f : 1f;
         var motlistPath = _currentMotlistPath;
         var operation = ++_previewSeq;
+        var pak = _pak;
         var sceneMeshes = Viewport.SceneMeshes;
         var meshBoneNames = Viewport.AllMeshBoneNames;
         try
         {
             var clip = await Task.Run(() =>
             {
-                using var motMs = _pak.ReadFile(motlistPath);
-                var clip = ViewportDataLoader.LoadAnimation(motMs, motlistPath, idx,
-                    meshBoneNames, sceneMeshes);
-                return clip;
+                using var baseMs = pak.ReadFile(motlistPath);
+                var basis = ViewportDataLoader.LoadAnimation(baseMs, motlistPath, selected.SourceIndex, meshBoneNames, sceneMeshes);
+                if (additiveSource < 0 && layerProfile == null) return basis;
+                AnimationClip? additive = null;
+                if (additiveSource >= 0)
+                {
+                    using var addMs = pak.ReadFile(motlistPath);
+                    additive = ViewportDataLoader.LoadAnimation(addMs, motlistPath, additiveSource, meshBoneNames, sceneMeshes);
+                }
+                var bones = AnimationSkeleton.PreviewBones(sceneMeshes);
+                var combined = layerProfile is { } profile
+                    ? AnimationPreviewMixer.ComposeUpperBody(basis, additive, bones,
+                        AnimationPreviewProfiles.ReadRe4Mask(pak, bones, profile.BaseMaskId, profile.JointMapPath),
+                        AnimationPreviewProfiles.ReadRe4Mask(pak, bones, profile.AdditiveMaskId, profile.JointMapPath), weight)
+                    : AnimationPreviewMixer.Compose(basis, additive!, bones, weight);
+                combined.Name += layerProfile != null
+                    ? (additiveSource < 0 || confirmedPair ? "（游戏分层 · 站姿参考）" : "（手动组合 · 基础动作分层）")
+                    : "（手动叠加预览）";
+                return combined;
             });
-            if (operation != _previewSeq) return;
+            if (operation != _previewSeq || request != _previewRequest || motlistPath != _currentMotlistPath) return;
             Viewport.SetAnimation(clip);
-            _loadedMotionComboIndex = comboIndex;
+            RememberLoadedMotionUi();
             ShowTimeline(clip.Duration);
             ActionStatus.Text = $"动画播放中: {clip.Name}（时长 {clip.Duration:F1}s）";
         }
         catch (Exception ex)
         {
-            if (operation != _previewSeq) return;
-            _syncingMotionUi = true;
-            MotionCombo.SelectedIndex = _loadedMotionComboIndex;
-            _syncingMotionUi = false;
+            if (operation != _previewSeq || request != _previewRequest || motlistPath != _currentMotlistPath) return;
+            RestoreLoadedMotionUi();
             ActionStatus.Text = "动作加载失败：" + ex.Message;
         }
     }
@@ -2282,9 +2447,16 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             using var namesStream = _pak.ReadFile(path);
             var motions = ViewportDataLoader.ListMotions(namesStream, path);
             if (motions.Count == 0) throw new InvalidDataException("动画列表中没有可读取的内嵌动作");
+            var livePairs = Re4AnimationLayerResolver.AppliesTo(path)
+                ? Re4AnimationLayerResolver.Resolve(_pak).ForList(path, motions) : [];
+            var selected = motions[Math.Clamp(index, 0, motions.Count - 1)];
+            if (path.Contains("/_chainsaw/animation/", StringComparison.OrdinalIgnoreCase)
+                && path.EndsWith(".motlist.663", StringComparison.OrdinalIgnoreCase)
+                && AnimationLayerCatalog.IsAdditive(path, selected, livePairs))
+                selected = motions.FirstOrDefault(m => !AnimationLayerCatalog.IsAdditive(path, m, livePairs)) ?? selected;
             using var motionStream = _pak.ReadFile(path);
             var clip = ViewportDataLoader.LoadAnimation(motionStream, path,
-                motions[Math.Clamp(index, 0, motions.Count - 1)].SourceIndex,
+                selected.SourceIndex,
                 meshBoneNames, sceneMeshes);
             return (clip, motions);
         });
@@ -2293,11 +2465,26 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void SetMotionListUi(string path, IReadOnlyList<MotionInfo> motions, int selectedIndex)
     {
         _currentMotlistPath = path;
-        _loadedMotionComboIndex = selectedIndex;
-        _currentMotionIndices = motions.Select(motion => motion.SourceIndex).ToArray();
+        _previewMotions = motions;
+        // The costly resource parsing was warmed on the loading worker. A live
+        // archive never falls back to the offline, single-list audit fixture.
+        var liveConfiguration = _pak != null && Re4AnimationLayerResolver.AppliesTo(path)
+            ? Re4AnimationLayerResolver.Resolve(_pak) : null;
+        _previewLayerPairs = _pak == null ? null : liveConfiguration?.ForList(path, motions) ?? [];
+        if (liveConfiguration != null)
+            foreach (var diagnostic in liveConfiguration.Diagnostics) AppendLog("动画配对配置：" + diagnostic);
+        ++_previewRequest;
         _syncingMotionUi = true;
-        MotionCombo.ItemsSource = motions.Select(motion => motion.DisplayName).ToArray();
-        MotionCombo.SelectedIndex = selectedIndex;
+        var rawOnly = HasOnlyAdditiveTracks;
+        ShowRawMotionTracks.IsEnabled = !rawOnly;
+        ShowRawMotionTracks.IsChecked = rawOnly;
+        AdvancedMotionOptions.IsExpanded = rawOnly;
+        _baseMotionBeforeRaw = -1;
+        var preferred = (uint)selectedIndex < (uint)motions.Count ? motions[selectedIndex].SourceIndex : -1;
+        PopulatePreviewMotionChoices(preferred);
+        RememberLoadedMotionUi();
+        BlendPreviewPanel.IsVisible = motions.Count > 0;
+        UpdateBlendPreviewDescription();
         MotionCombo.IsVisible = motions.Count > 0;
         MotionLabel.IsVisible = motions.Count > 0;
         _syncingMotionUi = false;
@@ -2305,9 +2492,13 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void ClearMotionState()
     {
+        ++_previewRequest;
         _currentMotlistPath = null;
+        _previewLayerPairs = [];
         _loadedMotionComboIndex = -1;
+        _loadedMotionSource = -1;
         _currentMotionIndices = [];
+        BlendPreviewPanel.IsVisible = false;
         _syncingMotionUi = true;
         MotionCombo.ItemsSource = null;
         MotionCombo.SelectedIndex = -1;
@@ -2526,6 +2717,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                         (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                             UpdateCountProgress(progress, current, total, "导出动画")),
                         exportFps.ToString());
+                    WriteAnimationGuide(finalDir, motlistPath);
                     return (Directory.GetFiles(finalDir, "*.fbx").Length, finalDir);
                 }
                 finally { TryDeleteDirectory(workDir); }
@@ -2714,6 +2906,21 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         catch { /* 临时文件会由系统稍后清理，不影响最终导出 */ }
     }
 
+    private void WriteAnimationGuide(string output, string source)
+    {
+        using var stream = _pak!.ReadFile(source);
+        var motions = ViewportDataLoader.ListMotions(stream, source);
+        var files = Directory.GetFiles(output, "*.fbx").Select(Path.GetFileName).ToArray();
+        var text = AnimationPreviewMixer.ResourceGuide + "\n\n来源：" + source + "\n\n本次导出文件与源动作：\n";
+        foreach (var motion in motions)
+        {
+            var marker = $"_motion{motion.SourceIndex:D3}_id{motion.MotionNumber}";
+            foreach (var file in files.Where(f => Path.GetFileNameWithoutExtension(f)!.EndsWith(marker, StringComparison.Ordinal)))
+                text += $"{file} → {motion.DisplayName}\n";
+        }
+        File.WriteAllText(Path.Combine(output, "动画资源使用说明.txt"), text);
+    }
+
     private static void EnsureBlender(string blender)
     {
         if (!File.Exists(blender))
@@ -2777,6 +2984,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var reason = process.ExitCode == 0 ? "未收到脚本完成标记" : $"代码 {process.ExitCode}";
             throw new InvalidOperationException($"FBX 转换失败（{reason}）\n完整记录：{conversionLog}\n{tail}");
         }
+        if (scriptName == "export_animations_fbx.py")
+            File.WriteAllText(Path.Combine(output, "动画资源使用说明.txt"), AnimationPreviewMixer.ResourceGuide);
     }
 
     private async Task ExportPathAsync(string path)
@@ -3216,6 +3425,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                                         UpdateCountProgress(progress, overall, totalWork,
                                             $"导出列表 {listNumber}/{paths.Length} · {stem} {current}/{total}"));
                                 }, exportFps.ToString());
+                            WriteAnimationGuide(finalDir, motlistPath);
                             exportedFbx += motionCount;
                             successfulLists++;
                         }
@@ -3365,12 +3575,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var (clip, motionNames) = await LoadMotionListAsync(path, 0);
             Viewport.SetAnimation(clip);
             SetMotionListUi(path, motionNames, 0);
-            ShowTimeline(clip.Duration);
-            ActionStatus.Text = $"动画已叠加: {clip.Name}（时长 {clip.Duration:F1}s）";
+            await LoadSelectedMotionAsync(null);
         }
         catch (Exception ex)
         {
-            ActionStatus.Text = "动画叠加失败: " + ex.Message;
+            ActionStatus.Text = "动画加载失败: " + ex.Message;
         }
     }
 

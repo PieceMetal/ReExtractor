@@ -212,10 +212,39 @@
               </ComboBox>
               <TextBlock Grid.Column="4" x:Name="MotionLabel" Text="动画" VerticalAlignment="Center"
                          Margin="12,0,5,0" IsVisible="False"/>
-              <ComboBox Grid.Column="5" x:Name="MotionCombo" Width="170" MinWidth="120" MaxWidth="260"
+              <ComboBox Grid.Column="5" x:Name="MotionCombo" Width="340" MinWidth="120" MaxWidth="480"
                         HorizontalAlignment="Right" SelectionChanged="OnMotionChanged"
                         IsVisible="False"/>
             </WrapPanel>
+            <Border x:Name="BlendPreviewPanel" IsVisible="False" Margin="0,10,0,0"
+                    Padding="12" Background="#192838" BorderBrush="#36516c" BorderThickness="1" CornerRadius="6">
+              <StackPanel Spacing="8">
+                <WrapPanel>
+                  <TextBlock Text="动画轨道与分层预览" FontWeight="SemiBold" Foreground="#8fc9ff" VerticalAlignment="Center" Margin="0,0,14,6"/>
+                  <TextBlock Text="仅改变预览 · 导出保留原始动作" Foreground="#b2c4d6" FontSize="12" VerticalAlignment="Center" Margin="0,0,0,6"/>
+                </WrapPanel>
+                <WrapPanel>
+                  <TextBlock Text="配对附加层" VerticalAlignment="Center" Margin="0,0,8,6"/>
+                  <ComboBox x:Name="AdditiveMotionCombo" Width="320" MaxWidth="480" Margin="0,0,12,6" SelectionChanged="OnBlendPreviewChanged"/>
+                  <StackPanel x:Name="BlendWeightPanel" Orientation="Horizontal" IsVisible="False" Margin="0,0,0,6" Spacing="8">
+                    <TextBlock Text="附加动作强度" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="BlendWeightCombo" Width="88" SelectedIndex="2" SelectionChanged="OnBlendPreviewChanged">
+                      <ComboBoxItem>0%</ComboBoxItem><ComboBoxItem>50%</ComboBoxItem><ComboBoxItem>100%</ComboBoxItem>
+                    </ComboBox>
+                  </StackPanel>
+                </WrapPanel>
+                <TextBlock x:Name="BlendPreviewDescription" TextWrapping="Wrap" Foreground="#b2c4d6" FontSize="12"/>
+                <Expander x:Name="AdvancedMotionOptions" Header="高级：原始轨道检查" IsExpanded="False" HorizontalAlignment="Stretch">
+                  <StackPanel Spacing="6" Margin="0,8,0,0">
+                    <TextBlock Text="单独查看源动作，不进行叠加。附加轨道单独播放时可能出现异常姿势。" TextWrapping="Wrap" Foreground="#edc17d" FontSize="12"/>
+                    <CheckBox x:Name="ShowRawMotionTracks" Content="单独检查原始轨道（退出组合预览）" IsCheckedChanged="OnRawMotionTracksChanged"/>
+                    <ScrollViewer MaxHeight="140">
+                      <TextBlock x:Name="RawAdditiveInventory" TextWrapping="Wrap" FontSize="12" Foreground="#b2c4d6"/>
+                    </ScrollViewer>
+                  </StackPanel>
+                </Expander>
+              </StackPanel>
+            </Border>
           </StackPanel>
         </Border>
 

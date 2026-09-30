@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using ReeLib;
 using ReeLib.Common;
 using ReeLib.Mdf;
@@ -1746,7 +1746,7 @@ public static class ViewportDataLoader
         return motlist.Motions.Select((motion, index) => (motion, index))
             .Where(item => item.motion.MotFile is MotFile)
             .Select(item => new MotionInfo(item.index,
-                $"{baseName} #{item.index}（编号 {item.motion.motNumber}）",
+                $"{item.motion.MotFile!.Name}（编号 {item.motion.motNumber}）",
                 item.motion.motNumber))
             .ToList();
     }
@@ -1808,8 +1808,7 @@ public static class ViewportDataLoader
 
         // Validate before appending helper bones: adding MOT bones must not make
         // an unrelated face/weapon skeleton appear compatible with the model.
-        var poseDriver = sceneMeshes?.OrderByDescending(mesh => mesh.DeformToBone.Length)
-            .ThenByDescending(mesh => mesh.VertexCount).FirstOrDefault();
+        var poseDriver = sceneMeshes == null ? null : AnimationSkeleton.SelectDriver(sceneMeshes);
         if (poseDriver != null) MotionSkeletonCompatibility.Validate(mot, poseDriver);
 
         // Noesis adds bones that exist in the MOT header but are absent from

@@ -1,6 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <EmbeddedResource Include="AnimationEvidence/re4-player-usage.json" LogicalName="ReExtractor.AnimationEvidence.re4-player-usage.json" />
+    <EmbeddedResource Include="AnimationEvidence/re4-preview-pairs.json" LogicalName="ReExtractor.AnimationEvidence.re4-preview-pairs.json" />
     <ProjectReference Include="..\..\libs\RE-Engine-Lib\REE-Lib\REE-Lib.csproj" />
     <ProjectReference Include="..\..\GDeflateNet\GDeflateNet\GDeflateNet.csproj" />
   </ItemGroup>
