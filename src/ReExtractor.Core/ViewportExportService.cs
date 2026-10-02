@@ -13,6 +13,8 @@ namespace ReExtractor.Core;
 /// <summary>Exports exactly what the interactive viewport currently shows.</summary>
 public sealed class ViewportExportService
 {
+    private readonly bool _unityAxes;
+    public ViewportExportService(bool unityAxes = false) => _unityAxes = unityAxes;
     private static readonly Matrix4x4 ReToUeWorld = new(
         1, 0, 0, 0,
         0, 0, 1, 0,
@@ -20,7 +22,7 @@ public sealed class ViewportExportService
         0, 0, 0, 1);
     public string ConvertToGlb(ViewportMesh mesh, IReadOnlySet<int> visibleGroups, string outputPath)
     {
-        var (scene, _) = BuildScene(mesh, visibleGroups);
+        var (scene, _) = BuildScene(mesh, visibleGroups, Path.GetFileNameWithoutExtension(outputPath));
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         scene.ToGltf2().SaveGLB(outputPath);
         return outputPath;
@@ -28,14 +30,14 @@ public sealed class ViewportExportService
 
     public string ConvertToAnimatedGlb(ViewportMesh mesh, IReadOnlySet<int> visibleGroups, AnimationClip clip, string outputPath)
     {
-        var (scene, nodes) = BuildScene(mesh, visibleGroups);
+        var (scene, nodes) = BuildScene(mesh, visibleGroups, Path.GetFileNameWithoutExtension(outputPath));
         ApplyAnimation(nodes, clip, mesh.AnimationBoneAliases);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         scene.ToGltf2().SaveGLB(outputPath);
         return outputPath;
     }
 
-    private static (SceneBuilder Scene, NodeBuilder[] Nodes) BuildScene(ViewportMesh mesh, IReadOnlySet<int> visibleGroups)
+    private (SceneBuilder Scene, NodeBuilder[] Nodes) BuildScene(ViewportMesh mesh, IReadOnlySet<int> visibleGroups, string meshName)
     {
         var scene = new SceneBuilder();
         var materials = BuildMaterials(mesh);
@@ -44,7 +46,7 @@ public sealed class ViewportExportService
         {
             // One MeshBuilder with multiple material primitives becomes ONE mesh object in
             // Blender/FBX/UE. A builder per material would produce scattered mesh objects.
-            var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexJoints8>("合并模型");
+            var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexJoints8>(meshName);
             var hasGeometry = false;
             for (var slot = -1; slot < Math.Max(1, mesh.Textures.Length); slot++)
             {
@@ -62,7 +64,7 @@ public sealed class ViewportExportService
         }
         else
         {
-            var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>("合并模型");
+            var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>(meshName);
             var hasGeometry = false;
             for (var slot = -1; slot < Math.Max(1, mesh.Textures.Length); slot++)
             {
@@ -76,7 +78,7 @@ public sealed class ViewportExportService
                     hasGeometry = true;
                 }
             }
-            if (hasGeometry) scene.AddRigidMesh(builder, ReToUeWorld);
+            if (hasGeometry) scene.AddRigidMesh(builder, _unityAxes ? Matrix4x4.Identity : ReToUeWorld);
         }
         return (scene, skeleton.Nodes);
     }
@@ -166,14 +168,14 @@ public sealed class ViewportExportService
         (NodeBuilder Joint, Matrix4x4 InverseBindMatrix)[] Joints,
         NodeBuilder[] Nodes);
 
-    private static SkeletonBuild BuildSkeleton(ViewportMesh mesh)
+    private SkeletonBuild BuildSkeleton(ViewportMesh mesh)
     {
         if (mesh.Bones.Length == 0 || mesh.DeformToBone.Length == 0)
             return new SkeletonBuild([], []);
         var nodes = mesh.Bones.Select((bone, index) =>
         {
             var local = bone.LocalBind;
-            if (bone.ParentIndex < 0) local = local * ReToUeWorld;
+            if (!_unityAxes && bone.ParentIndex < 0) local = local * ReToUeWorld;
             return new NodeBuilder(bone.Name) { LocalMatrix = local };
         }).ToArray();
         for (var i = 0; i < mesh.Bones.Length; i++)
@@ -260,13 +262,13 @@ public sealed class ViewportExportService
         return visibleGroups.Contains(mesh.FaceGroups[face]);
     }
 
-    private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> Vertex(ViewportMesh mesh, int index)
+    private VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> Vertex(ViewportMesh mesh, int index)
     {
         var normal = index < mesh.Normals.Length ? mesh.Normals[index] : Vector3.UnitZ;
         if (normal.LengthSquared() < 1e-6f) normal = Vector3.UnitZ;
         var uv = index < mesh.Uvs.Length ? mesh.Uvs[index] : Vector2.Zero;
-        return new(new VertexPositionNormal(Vector3.Transform(mesh.Vertices[index], ReToUeWorld),
-            Vector3.Normalize(Vector3.TransformNormal(normal, ReToUeWorld))), new VertexTexture1(uv));
+        return new(new VertexPositionNormal(Vector3.Transform(mesh.Vertices[index], _unityAxes ? Matrix4x4.Identity : ReToUeWorld),
+            Vector3.Normalize(Vector3.TransformNormal(normal, _unityAxes ? Matrix4x4.Identity : ReToUeWorld))), new VertexTexture1(uv));
     }
 
     private static VertexBuilder<VertexPositionNormal, VertexTexture1, VertexJoints8> SkinnedVertex(ViewportMesh mesh, int index)

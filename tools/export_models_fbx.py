@@ -3,6 +3,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fbx_export_profiles import prepare_export_axes, axis_options
+
 
 def arguments():
     values = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -205,8 +208,9 @@ if mesh_objects:
     if len(mesh_objects) > 1:
         bpy.ops.object.join()
     merged_mesh = bpy.context.view_layer.objects.active
-    merged_mesh.name = "合并模型"
-    merged_mesh.data.name = "合并模型"
+    export_name = os.path.splitext(os.path.basename(output_path))[0]
+    merged_mesh.name = export_name
+    merged_mesh.data.name = export_name
     if armatures:
         merged_mesh.parent = armatures[0]
 
@@ -230,20 +234,19 @@ if mesh_objects:
     merged_mesh.select_set(True)
     bpy.context.view_layer.objects.active = merged_mesh
 
+prepare_export_axes()
 save_external_textures(output_path)
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 bpy.ops.export_scene.fbx(
     filepath=output_path,
     use_selection=True,
-    object_types={"ARMATURE", "MESH"},
+    object_types={"ARMATURE", "MESH", "EMPTY"},
     bake_anim=False,
     add_leaf_bones=False,
     global_scale=1.0,
     apply_unit_scale=True,
     apply_scale_options="FBX_SCALE_NONE",
-    axis_forward="Y",
-    axis_up="Z",
-    use_space_transform=False,
+    **axis_options(),
     primary_bone_axis="Z",
     secondary_bone_axis="X",
     use_armature_deform_only=True,

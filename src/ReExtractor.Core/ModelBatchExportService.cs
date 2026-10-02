@@ -7,7 +7,7 @@ public static class ModelBatchExportService
 {
     public static ModelBatchExportResult Export(PakService pak, IReadOnlyList<string> paths,
         string outputRoot, string temporaryRoot, Action<string, string> convertToFbx,
-        Action<int, int>? progress = null, MaterialResolver? materialResolver = null, int lodIndex = 0)
+        Action<int, int>? progress = null, MaterialResolver? materialResolver = null, int lodIndex = 0, bool unityAxes = false)
     {
         var exported = new List<string>();
         var outputs = new List<string>();
@@ -39,7 +39,7 @@ public static class ModelBatchExportService
                 if (mesh.FaceCount == 0) throw new InvalidDataException("模型没有可导出的面");
                 workDirectory = Path.Combine(temporaryRoot, "model_batch_" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(workDirectory);
-                new ViewportExportService().ConvertToGlb(mesh,
+                new ViewportExportService(unityAxes).ConvertToGlb(mesh,
                     mesh.Groups.Where(group => group.DefaultVisible).Select(group => group.Key).ToHashSet(),
                     Path.Combine(workDirectory, "model.glb"));
                 Directory.CreateDirectory(Path.GetDirectoryName(output)!);

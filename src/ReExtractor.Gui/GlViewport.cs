@@ -210,6 +210,7 @@ public sealed class GlViewport : OpenGlControlBase
 
     public bool IsPlaying => _playing;
 
+    public AnimationClip? ExportAnimationClip => _clip;
     public bool HasAnimation => _clip != null && _clip.Duration > 0;
 
     public bool HasMesh => _primary != null;

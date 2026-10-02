@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Text.Json;
 
@@ -6,6 +6,7 @@ namespace ReExtractor.Gui;
 
 public sealed class AppSettings
 {
+    public bool UnityFbxAxes { get; set; }
     public string BlenderPath { get; set; } = "";
     public string OutputDirectory { get; set; } = AppPaths.OutputDirectory;
     public string LastGameDirectory { get; set; } = "";

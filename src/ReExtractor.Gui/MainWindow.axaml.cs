@@ -212,6 +212,7 @@ public partial class MainWindow : Window
             if (e.Property == Expander.IsExpandedProperty && !AdvancedMotionOptions.IsExpanded && !HasOnlyAdditiveTracks)
                 ShowRawMotionTracks.IsChecked = false;
         };
+        UpdateFbxTargetButtons();
         FeedbackSidebar.CloseRequested += () => SetFeedbackVisible(false);
         FeedbackSidebar.CurrentLogProvider = () => RunLogBox.Text ?? "";
         var displayVersion = _updateService.CurrentVersion.ToString(3);
@@ -287,6 +288,24 @@ public partial class MainWindow : Window
     private string CurrentOutputDirectory => string.IsNullOrWhiteSpace(_settings.OutputDirectory)
         ? AppPaths.OutputDirectory
         : _settings.OutputDirectory;
+    private void OnFbxTargetSelected(object? sender, RoutedEventArgs e)
+    {
+        if (!MainLayout.IsEnabled) return;
+        _settings.UnityFbxAxes = (sender as MenuItem)?.Tag?.ToString() == "unity";
+        AppSettingsService.Save(_settings);
+        UpdateFbxTargetButtons();
+    }
+
+    private void UpdateFbxTargetButtons()
+    {
+        var target = _settings.UnityFbxAxes ? "Unity（Y 轴向上）" : "UE（Z 轴向上）";
+        ExportButton.Content = target;
+        ExportAnimButton.Content = target;
+    }
+
+    private string CurrentFbxOutputDirectory => _settings.UnityFbxAxes
+        ? Path.Combine(CurrentOutputDirectory, "Unity_YUp") : CurrentOutputDirectory;
+
     private string CurrentBlenderPath => BlenderLocator.NormalizeExecutable(_settings.BlenderPath);
 
     private void AppendLog(string? message)
@@ -948,6 +967,7 @@ public partial class MainWindow : Window
         if (updated == null) return;
         updated.LastGameDirectory = GameDirBox.Text?.Trim() ?? _settings.LastGameDirectory;
         updated.LastListPath = SelectedListPath ?? _settings.LastListPath;
+        updated.UnityFbxAxes = _settings.UnityFbxAxes;
         _settings = updated;
         AppSettingsService.Save(_settings);
         ActionStatus.Text = "设置已保存";
@@ -2301,7 +2321,6 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         // Selecting a supported action previews its complete confirmed pair.
         // The first item remains available for an explicit no-overlay comparison.
         AdditiveMotionCombo.SelectedIndex = _relatedPreviewMotions.Count > 0 ? 1 : 0;
-        BlendWeightCombo.SelectedIndex = 2;
         var adds = _previewMotions.Where(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs)).ToArray();
         RawAdditiveInventory.Text = $"本资源列表的其他轨道（{adds.Length} 条）：\n"
             + string.Join("\n", adds.Select(m => m.DisplayName));
@@ -2310,11 +2329,10 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void UpdateBlendPreviewDescription()
     {
         var combined = SelectedAdditiveMotion != null;
-        BlendWeightPanel.IsVisible = combined;
         BlendPreviewDescription.Text = combined
             ? SelectedLayerProfile != null
-                ? "游戏配置配对预览：底层使用静态站姿，先应用附加层，再覆盖上半身主动作。强度仅调整附加层；未模拟移动、动态权重与 IK；导出保留原动作。"
-                : "手动叠加预览：局部增量、按原速同步，短轨道停在末帧。此组合的游戏层序未确认；导出保留原动作。"
+                ? "游戏配置配对预览：底层使用静态站姿，先应用附加层，再覆盖上半身主动作。未模拟移动、动态权重与 IK；当前动画导出包含预览叠加。"
+                : "手动叠加预览：局部增量、按原速同步，短轨道停在末帧。此组合的游戏层序未确认；当前动画导出包含预览叠加。"
             : SelectedBaseMotion is { } raw && AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, raw, _previewLayerPairs)
                 ? "当前单独播放原始轨道。"
                 : _relatedPreviewMotions.Count > 0
@@ -2324,8 +2342,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private int _baseMotionBeforeRaw = -1;
     private int _loadedMotionSource = -1;
+    private int _loadedPreviewRequest = -1;
     private int _loadedAdditiveSource = -1;
-    private int _loadedWeightIndex = 2;
     private bool _loadedRawMode;
 
     private void RememberLoadedMotionUi()
@@ -2333,7 +2351,6 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         _loadedMotionComboIndex = MotionCombo.SelectedIndex;
         _loadedMotionSource = SelectedBaseMotion?.SourceIndex ?? -1;
         _loadedAdditiveSource = SelectedAdditiveMotion?.SourceIndex ?? -1;
-        _loadedWeightIndex = BlendWeightCombo.SelectedIndex;
         _loadedRawMode = ShowRawMotionTracks.IsChecked == true;
     }
 
@@ -2347,7 +2364,6 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             PopulatePreviewMotionChoices(_loadedMotionSource);
             AdditiveMotionCombo.SelectedIndex = _relatedPreviewMotions.ToList()
                 .FindIndex(m => m.SourceIndex == _loadedAdditiveSource) + 1;
-            BlendWeightCombo.SelectedIndex = _loadedWeightIndex;
         }
         finally { _syncingMotionUi = false; }
         UpdateBlendPreviewDescription();
@@ -2393,7 +2409,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var layerProfile = SelectedLayerProfile;
         var confirmedPair = IsConfirmedLayerPair;
         var additiveSource = SelectedAdditiveMotion?.SourceIndex ?? -1;
-        var weight = BlendWeightCombo.SelectedIndex == 0 ? 0f : BlendWeightCombo.SelectedIndex == 1 ? .5f : 1f;
+        const float weight = 1f;
         var motlistPath = _currentMotlistPath;
         var operation = ++_previewSeq;
         var pak = _pak;
@@ -2425,6 +2441,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             });
             if (operation != _previewSeq || request != _previewRequest || motlistPath != _currentMotlistPath) return;
             Viewport.SetAnimation(clip);
+            _loadedPreviewRequest = request;
             RememberLoadedMotionUi();
             ShowTimeline(clip.Duration);
             ActionStatus.Text = $"动画播放中: {clip.Name}（时长 {clip.Duration:F1}s）";
@@ -2631,7 +2648,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (models.Count == 0) { ActionStatus.Text = "当前场景没有可导出的静态模型"; return; }
         if (!await EnsureBlenderReadyAsync()) return;
         var marker = scenePath.Contains(".scn.", StringComparison.OrdinalIgnoreCase) ? ".scn" : ".pfb";
-        var outputPath = Path.Combine(Path.GetFullPath(CurrentOutputDirectory), NativeStem(scenePath, marker) + "_场景.fbx");
+        var outputPath = Path.Combine(Path.GetFullPath(CurrentFbxOutputDirectory), NativeStem(scenePath, marker) + "_场景.fbx");
         var progress = BeginProgress("正在导出场景 FBX…");
         ExportButton.IsEnabled = false;
         try
@@ -2642,7 +2659,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 try
                 {
                     var export = models.Select(model => (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups)).ToArray();
-                    new ViewportExportService().ConvertMergedToGlb(export, Path.Combine(workDir, "001_scene.glb"));
+                    new ViewportExportService(_settings.UnityFbxAxes).ConvertMergedToGlb(export, Path.Combine(workDir, "001_scene.glb"));
                     RunBlenderBatch("export_models_fbx.py", CurrentBlenderPath, workDir, outputPath);
                 }
                 finally { TryDeleteDirectory(workDir); }
@@ -2670,9 +2687,14 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (exportCurrent && ((uint)selectedMotionComboIndex >= (uint)_currentMotionIndices.Length))
         { ActionStatus.Text = "请先在动画下拉框中选择要导出的当前动画"; return; }
         var selectedMotionSourceIndex = exportCurrent ? _currentMotionIndices[selectedMotionComboIndex] : -1;
+        // Finish the selected preview before capturing it, including layer and weight choices.
+        if (exportCurrent) await LoadSelectedMotionAsync(null);
+        var exportClip = exportCurrent ? Viewport.ExportAnimationClip : null;
+        if (exportCurrent && (exportClip == null || _loadedPreviewRequest != _previewRequest || _loadedMotionSource != selectedMotionSourceIndex))
+        { ActionStatus.Text = "当前动作尚未成功加载，请重试"; return; }
 
         var motlistPath = _currentMotlistPath;
-        var outDir = Path.GetFullPath(CurrentOutputDirectory);
+        var outDir = Path.GetFullPath(CurrentFbxOutputDirectory);
         if (!await EnsureBlenderReadyAsync()) return;
         var blender = CurrentBlenderPath;
         var scopeText = exportCurrent ? "当前动画" : "全部动画";
@@ -2694,18 +2716,17 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     var models = exportModels
                         .Select(model => (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups))
                         .ToArray();
-                    var merged = new ViewportExportService().BuildMergedExportModel(models);
+                    var merged = new ViewportExportService(_settings.UnityFbxAxes).BuildMergedExportModel(models);
                     using var motMs = _pak.ReadFile(motlistPath);
                     if (exportCurrent)
                     {
-                        new AnimationService().ConvertOneToGlbWithAnimation(
-                            merged.Mesh, motMs, motlistPath, selectedMotionSourceIndex, workDir,
-                            (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                                UpdateCountProgress(progress, current, total, "准备动作")));
+                        var outputPath = Path.Combine(workDir, $"001_{SafeFileName(stem)}_preview_motion{selectedMotionSourceIndex:D3}.glb");
+                        new ViewportExportService(_settings.UnityFbxAxes).ConvertToAnimatedGlb(
+                            merged.Mesh, merged.VisibleGroups, exportClip!, outputPath);
                     }
                     else
                     {
-                        new AnimationService().ConvertAllToGlbWithAnimation(
+                        new AnimationService(_settings.UnityFbxAxes).ConvertAllToGlbWithAnimation(
                             merged.Mesh, motMs, motlistPath, workDir,
                             (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                                 UpdateCountProgress(progress, current, total, "准备动作")));
@@ -2718,6 +2739,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                             UpdateCountProgress(progress, current, total, "导出动画")),
                         exportFps.ToString());
                     WriteAnimationGuide(finalDir, motlistPath);
+                    if (exportCurrent) File.AppendAllText(Path.Combine(finalDir, "动画资源使用说明.txt"), "\n本次当前动画按已加载预览导出（包含所选分层）："+exportClip!.Name+"\n作为普通动画播放，不要再次设置为叠加动画。\n");
                     return (Directory.GetFiles(finalDir, "*.fbx").Length, finalDir);
                 }
                 finally { TryDeleteDirectory(workDir); }
@@ -2751,7 +2773,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var sourceCount = paths.Length;
         if (exportModels.Count == 0)
             throw new InvalidOperationException("预览场景没有可导出的模型");
-        var outDir = Path.GetFullPath(CurrentOutputDirectory);
+        var outDir = Path.GetFullPath(CurrentFbxOutputDirectory);
         if (!await EnsureBlenderReadyAsync()) return;
         var blender = CurrentBlenderPath;
         var usePresetName = !string.IsNullOrWhiteSpace(_loadedPresetName) &&
@@ -2811,7 +2833,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                                 .Select(group => group.Key).ToHashSet();
                         models = [(merged, (IReadOnlySet<int>)visible)];
                     }
-                    new ViewportExportService().ConvertMergedToGlb(models,
+                    new ViewportExportService(_settings.UnityFbxAxes).ConvertMergedToGlb(models,
                         Path.Combine(workDir, $"001_{NativeStem(paths[0], ".mesh")}_合并.glb"));
                     RunBlenderBatch("export_models_fbx.py", blender, workDir, outputPath);
                 }
@@ -2927,13 +2949,14 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             throw new FileNotFoundException("找不到 FBX 转换程序，请检查顶部的转换程序路径", blender);
     }
 
-    private static void RunBlenderBatch(string scriptName, string blender, string input, string output,
+    private void RunBlenderBatch(string scriptName, string blender, string input, string output,
         Action<int, int>? progress = null, params string[] extraArgs)
     {
         blender = BlenderLocator.NormalizeExecutable(blender);
         if (BlenderLocator.IsLauncher(blender))
             throw new InvalidOperationException("请选择 blender.exe，而不是 blender-launcher.exe；同目录未找到 Blender 主程序。");
         var script = ResolveToolsScript(scriptName);
+        ResolveToolsScript("fbx_export_profiles.py");
         var start = new ProcessStartInfo(blender)
         {
             UseShellExecute = false,
@@ -2941,6 +2964,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        start.Environment["REEXTRACTOR_FBX_TARGET"] = _settings.UnityFbxAxes ? "unity" : "ue";
         start.ArgumentList.Add("--background");
         start.ArgumentList.Add("--python-exit-code");
         start.ArgumentList.Add("1");
@@ -3251,7 +3275,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (!await EnsureBlenderReadyAsync()) return;
             var pak = _pak;
             var blender = CurrentBlenderPath;
-            var outputRoot = Path.GetFullPath(CurrentOutputDirectory);
+            var outputRoot = Path.GetFullPath(CurrentFbxOutputDirectory);
             var materialResolver = await PrepareMaterialsAsync(pak, paths);
             if (materialResolver == null) return;
             progress = BeginProgress($"正在分别导出 {paths.Length} 个模型…", false, paths.Length);
@@ -3260,7 +3284,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var result = await Task.Run(() => ModelBatchExportService.Export(pak, paths, outputRoot, _tempDir,
                 (input, output) => RunBlenderBatch("export_models_fbx.py", blender, input, output),
                 (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    UpdateCountProgress(operation, current, total, "批量导出模型")), materialResolver, exportLod));
+                    UpdateCountProgress(operation, current, total, "批量导出模型")), materialResolver, exportLod, _settings.UnityFbxAxes));
             foreach (var failure in result.Failures) AppendLog("模型批量导出失败：" + failure);
             foreach (var output in result.OutputFiles) AppendLog("模型已单独导出：" + output);
             ActionStatus.Text = $"批量导出完成：成功 {result.OutputFiles.Count}，失败 {result.Failures.Count} | {Path.Combine(outputRoot, "models")}";
@@ -3340,7 +3364,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         if (!await EnsureBlenderReadyAsync()) return;
 
         var paths = _animationExportQueue.ToArray();
-        var outDir = Path.GetFullPath(CurrentOutputDirectory);
+        var outDir = Path.GetFullPath(CurrentFbxOutputDirectory);
         var blender = CurrentBlenderPath;
         var progress = BeginProgress($"正在统计 {paths.Length} 个 MotionList…");
         ActionStatus.Text = $"正在批量导出 {paths.Length} 个 MotionList 的全部动画…";
@@ -3354,7 +3378,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                 var models = exportModels
                     .Select(model => (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups))
                     .ToArray();
-                var merged = new ViewportExportService().BuildMergedExportModel(models);
+                var merged = new ViewportExportService(_settings.UnityFbxAxes).BuildMergedExportModel(models);
                 var motionCounts = new int[paths.Length];
                 var failures = new List<string>();
                 for (var listIndex = 0; listIndex < paths.Length; listIndex++)
@@ -3407,7 +3431,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                         try
                         {
                             using var motMs = _pak.ReadFile(motlistPath);
-                            new AnimationService().ConvertAllToGlbWithAnimation(
+                            new AnimationService(_settings.UnityFbxAxes).ConvertAllToGlbWithAnimation(
                                 merged.Mesh, motMs, motlistPath, listWorkDir,
                                 (current, total) =>
                                 {

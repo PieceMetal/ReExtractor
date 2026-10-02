@@ -221,17 +221,11 @@
               <StackPanel Spacing="8">
                 <WrapPanel>
                   <TextBlock Text="动画轨道与分层预览" FontWeight="SemiBold" Foreground="#8fc9ff" VerticalAlignment="Center" Margin="0,0,14,6"/>
-                  <TextBlock Text="仅改变预览 · 导出保留原始动作" Foreground="#b2c4d6" FontSize="12" VerticalAlignment="Center" Margin="0,0,0,6"/>
+                  <TextBlock Text="当前动画导出包含预览叠加" Foreground="#b2c4d6" FontSize="12" VerticalAlignment="Center" Margin="0,0,0,6"/>
                 </WrapPanel>
                 <WrapPanel>
                   <TextBlock Text="配对附加层" VerticalAlignment="Center" Margin="0,0,8,6"/>
                   <ComboBox x:Name="AdditiveMotionCombo" Width="320" MaxWidth="480" Margin="0,0,12,6" SelectionChanged="OnBlendPreviewChanged"/>
-                  <StackPanel x:Name="BlendWeightPanel" Orientation="Horizontal" IsVisible="False" Margin="0,0,0,6" Spacing="8">
-                    <TextBlock Text="附加动作强度" VerticalAlignment="Center"/>
-                    <ComboBox x:Name="BlendWeightCombo" Width="88" SelectedIndex="2" SelectionChanged="OnBlendPreviewChanged">
-                      <ComboBoxItem>0%</ComboBoxItem><ComboBoxItem>50%</ComboBoxItem><ComboBoxItem>100%</ComboBoxItem>
-                    </ComboBox>
-                  </StackPanel>
                 </WrapPanel>
                 <TextBlock x:Name="BlendPreviewDescription" TextWrapping="Wrap" Foreground="#b2c4d6" FontSize="12"/>
                 <Expander x:Name="AdvancedMotionOptions" Header="高级：原始轨道检查" IsExpanded="False" HorizontalAlignment="Stretch">
@@ -482,6 +476,7 @@
           </Border>
 
           <TextBlock Text="FBX 导出" Foreground="#aab2c0" FontWeight="SemiBold" Margin="0,0,0,7"/>
+          <TextBlock Text="模型与动画请选择相同的轴向。右侧箭头可切换导出目标。" TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,7"/>
           <StackPanel Margin="0,0,0,12">
             <Border Background="#202936" BorderBrush="#3c74ad" BorderThickness="1" CornerRadius="6"
                     Padding="10" Margin="0,0,0,8">
@@ -490,8 +485,15 @@
                 <TextBlock Text="导出当前预览中可见的全部模型分件。"
                            TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,8"/>
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                  <Button Grid.Column="0" x:Name="ExportButton" Content="导出预览模型 FBX" Click="OnExportClicked"
-                          Background="#2563a8" Foreground="White" Padding="10,7"/>
+                  <SplitButton Grid.Column="0" x:Name="ExportButton" Content="导出预览模型 FBX" Click="OnExportClicked"
+                          Background="#2563a8" Foreground="White" Padding="10,7">
+                    <SplitButton.Flyout>
+                      <MenuFlyout Placement="Bottom">
+                        <MenuItem Header="UE（Z 轴向上）" Tag="ue" Click="OnFbxTargetSelected"/>
+                        <MenuItem Header="Unity（Y 轴向上）" Tag="unity" Click="OnFbxTargetSelected"/>
+                      </MenuFlyout>
+                    </SplitButton.Flyout>
+                  </SplitButton>
                   <Button Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
                 </Grid>
               </StackPanel>
@@ -500,14 +502,14 @@
             <Border Background="#292631" BorderBrush="#765c91" BorderThickness="1" CornerRadius="6" Padding="10">
               <StackPanel>
                 <TextBlock Text="动画导出" Foreground="#d3a9ff" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <TextBlock Text="每个动画单独导出，附带绑定参考网格。"
+                <TextBlock Text="每个动画单独导出，仅含骨架与动画，不附带模型网格。"
                            TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,8"/>
                 <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto" Margin="0,0,0,7">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="范围" VerticalAlignment="Center" Margin="0,0,8,6"/>
                   <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ExportAnimScopeCombo" SelectedIndex="0"
                             SelectionChanged="OnExportAnimScopeChanged"
                             MinWidth="110" HorizontalAlignment="Stretch" Margin="0,0,0,6">
-                    <ComboBoxItem>当前动画</ComboBoxItem>
+                    <ComboBoxItem>当前动画（含预览叠加）</ComboBoxItem>
                     <ComboBoxItem>当前列表全部动画</ComboBoxItem>
                     <ComboBoxItem>批量列表全部动画</ComboBoxItem>
                   </ComboBox>
@@ -559,8 +561,15 @@
                   </StackPanel>
                 </Border>
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                  <Button Grid.Column="0" x:Name="ExportAnimButton" Content="导出动画 FBX" Click="OnExportAnimClicked"
-                          Background="#65417f" Foreground="White" Padding="10,7"/>
+                  <SplitButton Grid.Column="0" x:Name="ExportAnimButton" Content="导出动画 FBX" Click="OnExportAnimClicked"
+                          Background="#65417f" Foreground="White" Padding="10,7">
+                    <SplitButton.Flyout>
+                      <MenuFlyout Placement="Bottom">
+                        <MenuItem Header="UE（Z 轴向上）" Tag="ue" Click="OnFbxTargetSelected"/>
+                        <MenuItem Header="Unity（Y 轴向上）" Tag="unity" Click="OnFbxTargetSelected"/>
+                      </MenuFlyout>
+                    </SplitButton.Flyout>
+                  </SplitButton>
                   <Button Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
                 </Grid>
               </StackPanel>

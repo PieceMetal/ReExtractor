@@ -17,7 +17,7 @@ public partial class MainWindow
         public string MotionListPath { get; set; } = "";
         public int BaseId { get; set; }
         public int? AdditiveId { get; set; }
-        public int WeightPercent { get; set; } = 100;
+
     }
 
     private async Task LoadPreviewSessionAsync(string sessionPath)
@@ -26,9 +26,8 @@ public partial class MainWindow
         {
             var session = JsonSerializer.Deserialize<PreviewSession>(await File.ReadAllTextAsync(sessionPath))
                 ?? throw new InvalidDataException("预览配置为空");
-            if (session.MeshPaths.Length == 0 || !Directory.Exists(session.GameDirectory)
-                || session.WeightPercent is not (0 or 50 or 100))
-                throw new InvalidDataException("预览配置中的模型、目录或权重无效");
+            if (session.MeshPaths.Length == 0 || !Directory.Exists(session.GameDirectory))
+                throw new InvalidDataException("预览配置中的模型或目录无效");
             var managedPath = await new FileListManagerService().ImportAsync(session.ListPath);
             RefreshManagedLists(managedPath);
             GameDirBox.Text = session.GameDirectory;
@@ -53,7 +52,7 @@ public partial class MainWindow
                     AdditiveMotionCombo.SelectedIndex = addIndex + 1;
                 }
                 else AdditiveMotionCombo.SelectedIndex = 0;
-                BlendWeightCombo.SelectedIndex = session.WeightPercent / 50;
+                // Selecting an additive clip applies it fully; no separate strength control.
             }
             finally { _syncingMotionUi = false; }
             UpdateBlendPreviewDescription();
@@ -64,7 +63,7 @@ public partial class MainWindow
             Title += " · 动画分层本地测试";
             await File.WriteAllTextAsync(sessionPath + ".result.json", JsonSerializer.Serialize(new {
                 Ready = true, BaseId = SelectedBaseMotion?.MotionNumber,
-                AdditiveId = SelectedAdditiveMotion?.MotionNumber, session.WeightPercent,
+                AdditiveId = SelectedAdditiveMotion?.MotionNumber,
                 Meshes = _previewMeshPaths, Playing = Viewport.IsPlaying, Viewport.Duration,
                 Status = ActionStatus.Text, Profile = BlendPreviewDescription.Text
             }, new JsonSerializerOptions { WriteIndented = true }));

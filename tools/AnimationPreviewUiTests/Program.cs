@@ -178,7 +178,6 @@ if(args.Length == 2 && args[0] is "--session" or "--session-dropdowns")
         var pairIndex=related.ToList().FindIndex(m=>m.MotionNumber==pair.Item2);
         if(pairIndex<0||related.Count!=1)throw new Exception("Confirmed pair list is incorrect");
         main.FindControl<ComboBox>("AdditiveMotionCombo")!.SelectedIndex=pairIndex+1;
-        main.FindControl<ComboBox>("BlendWeightCombo")!.SelectedIndex=2;
         sync.SetValue(main,false);
         mainType.GetMethod("UpdateBlendPreviewDescription",flags)!.Invoke(main,null);
         var pending=(Task)mainType.GetMethod("LoadSelectedMotionAsync",flags)!.Invoke(main,new object?[]{null})!;
@@ -261,24 +260,24 @@ using(var inventory=System.Text.Json.JsonDocument.Parse(File.ReadAllText("artifa
 Load(re4,motions);
 var panel=main.FindControl<Border>("BlendPreviewPanel")!;
 var additive=main.FindControl<ComboBox>("AdditiveMotionCombo")!;
-var weight=main.FindControl<StackPanel>("BlendWeightPanel")!;
+if(main.FindControl<ComboBox>("BlendWeightCombo") != null) throw new Exception("Percentage selector must be removed");
 var motion=main.FindControl<ComboBox>("MotionCombo")!;
 var raw=main.FindControl<CheckBox>("ShowRawMotionTracks")!;
 var advanced=main.FindControl<Expander>("AdvancedMotionOptions")!;
 if(advanced.IsExpanded || raw.IsChecked == true)throw new Exception("Advanced raw mode must start closed");
-if(!panel.IsVisible||motion.ItemCount!=3||additive.ItemCount!=1||weight.IsVisible)throw new Exception("Base list separation");
+if(!panel.IsVisible||motion.ItemCount!=3||additive.ItemCount!=1)throw new Exception("Base list separation");
 motion.SelectedIndex=1;
 if(additive.ItemCount!=2||additive.SelectedIndex!=1)throw new Exception("Related layer missing or not automatically enabled");
 additive.SelectedIndex=1;
-if(motion.SelectedIndex!=1||!weight.IsVisible)throw new Exception("Additive replaced base");
+if(motion.SelectedIndex!=1)throw new Exception("Additive replaced base");
 var indices=(int[])typeof(MainWindow).GetField("_currentMotionIndices",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(main)!;
 if(indices[motion.SelectedIndex]!=52)throw new Exception("Current export no longer points to base");
 additive.SelectedIndex=0;
-if(motion.SelectedIndex!=1||weight.IsVisible)throw new Exception("Disable changed base");
+if(motion.SelectedIndex!=1)throw new Exception("Disable changed base");
 motion.SelectedIndex=2;
 if(additive.ItemCount!=2||!((ComboBoxItem)additive.Items[1]!).IsEnabled)throw new Exception("Manual layer unavailable");
 additive.SelectedIndex=1;
-if(motion.SelectedIndex!=2||!weight.IsVisible)throw new Exception("Manual layer replaced base");
+if(motion.SelectedIndex!=2)throw new Exception("Manual layer replaced base");
 advanced.IsExpanded=true;raw.IsChecked=true;
 if(additive.IsEnabled)throw new Exception("Raw mode must disable composition");
 if(motion.ItemCount!=6)throw new Exception("Raw tracks missing");
@@ -316,7 +315,7 @@ for(int i=0;i<realBases.Length;i++)
         {
             if(!((ComboBoxItem)additive.Items[j+1]!).IsEnabled)throw new Exception("Manual candidate disabled");
             additive.SelectedIndex=j+1;
-            if(motion.SelectedIndex!=i||!weight.IsVisible)throw new Exception("Manual candidate changed base");
+            if(motion.SelectedIndex!=i)throw new Exception("Manual candidate changed base");
         }
     advanced.IsExpanded=true;raw.IsChecked=true;
     motion.SelectedIndex=Array.FindIndex(realMotions,m=>AnimationLayerCatalog.IsAdditive(m));
@@ -371,13 +370,12 @@ Console.WriteLine("CROSS_BANK_CONTEXT_UNKNOWN_OVERRIDE_AND_RAW_ONLY_PASS");
 // v1.4.4 restores the previously loaded selection when a load fails. Verify
 // that filtering and additive choices are restored together with that base.
 motion.SelectedIndex=Array.FindIndex(realBases,m=>m.MotionNumber==910);additive.SelectedIndex=1;
-main.FindControl<ComboBox>("BlendWeightCombo")!.SelectedIndex=1;
 typeof(MainWindow).GetMethod("RememberLoadedMotionUi",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(main,null);
 advanced.IsExpanded=true;raw.IsChecked=true;
 motion.SelectedIndex=Array.FindIndex(realMotions,m=>m.MotionNumber==500);
 typeof(MainWindow).GetMethod("RestoreLoadedMotionUi",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(main,null);
-if(raw.IsChecked==true||realBases[motion.SelectedIndex].MotionNumber!=910||additive.SelectedIndex!=1||main.FindControl<ComboBox>("BlendWeightCombo")!.SelectedIndex!=1)
-    throw new Exception("Failed load did not restore base, overlay, weight and mode");
+if(raw.IsChecked==true||realBases[motion.SelectedIndex].MotionNumber!=910||additive.SelectedIndex!=1)
+    throw new Exception("Failed load did not restore base, overlay and mode");
 Console.WriteLine("V144_FAILED_LOAD_SELECTION_RESTORE_PASS");
 var scaledTrack=new BoneTrack {ScaleTimes=[0,1],Scales=[System.Numerics.Vector3.One,new(2,3,4)]};
 var evaluator=typeof(MainWindow).Assembly.GetType("ReExtractor.Gui.GlViewport")!.GetMethod("EvaluateLocal",BindingFlags.NonPublic|BindingFlags.Static)!;

@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using ReeLib;
 using ReeLib.Common;
 using ReeLib.Mesh;
@@ -12,6 +12,8 @@ namespace ReExtractor.Core;
 /// </summary>
 public sealed class AnimationService
 {
+    private readonly bool _unityAxes;
+    public AnimationService(bool unityAxes = false) => _unityAxes = unityAxes;
 
     public IReadOnlyList<string> ConvertOneToGlbWithAnimation(
         ViewportMesh skeletonMesh,
@@ -39,7 +41,7 @@ public sealed class AnimationService
         var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
             (int)mot.Header.version == 892, motlistPath);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
-        new ViewportExportService().ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
+        new ViewportExportService(_unityAxes).ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
         progress?.Invoke(1, 1);
         return new[] { outputPath };
     }
@@ -59,7 +61,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         var outputs = new List<string>();
         var exportableCount = motlist.Motions.Count(motion => motion.MotFile is MotFile);
         var boneNames = skeletonMesh.Bones.Select(bone => bone.Name).ToArray();
-        var exporter = new ViewportExportService();
+        var exporter = new ViewportExportService(_unityAxes);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
         for (var index = 0; index < motlist.Motions.Count; index++)
         {

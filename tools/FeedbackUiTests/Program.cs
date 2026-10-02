@@ -7,6 +7,13 @@ using Avalonia.Themes.Fluent;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using ReExtractor.Gui;
+if(args.Contains("--live-status")) {
+    var livePage=FeedbackService.ReadCommentsAsync(1).GetAwaiter().GetResult();
+    if(livePage.Items.Count==0||livePage.Items.Any(x=>x.ProcessingStatus=="unknown"))throw new Exception("Live endpoint missing status data");
+    foreach(var group in livePage.Items.GroupBy(x=>x.ProcessingStatusLabel))Console.WriteLine($"{group.Key}: {group.Count()}");
+    Console.WriteLine("PASS: production comments parsed by the actual desktop service");
+    return;
+}
 Environment.SetEnvironmentVariable("REEXTRACTOR_DATA_DIR", Path.GetFullPath("artifacts/feedback-ui-test/" + Guid.NewGuid()));
 AppBuilder.Configure<Application>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false }).SetupWithoutStarting();
 Application.Current!.Styles.Add(new FluentTheme());
@@ -63,6 +70,20 @@ if (!panel.FindControl<TextBlock>("FeedbackStatus")!.Text!.StartsWith("已发送
 if(!panel.FindControl<StackPanel>("DraftCards")!.GetVisualDescendants().OfType<SelectableTextBlock>().Any(x=>x.Text=="其他人的公开评论"))throw new Exception("Public comment missing");
 var readField=typeof(FeedbackPanel).GetField("_readComments",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!;
 var sync=typeof(FeedbackPanel).GetMethod("SyncVisibilityAsync",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!;
+foreach(var (code,label) in new[]{("pending","待处理"),("running","正在处理"),("completed","正在处理"),("confirmed","已处理"),("queued","待处理"),("failed","待处理"),("cancelled","待处理"),("future","待处理")}) {
+    var json=System.Text.Json.JsonSerializer.Serialize(new{items=new[]{new{id="status-test",message="合成反馈\n管理员回复保持可见",nickname="状态验证",created_at=1790800000000L,processing_status=code}},page=1,total=1});
+    var page=FeedbackService.ParseComments(json);
+    if(page.Items.Single().ProcessingStatusLabel!=label)throw new Exception("Incorrect status label: "+code);
+    readField.SetValue(panel,(Func<int,Task<FeedbackService.PublicPage>>)(_=>Task.FromResult(page)));
+    ((Task)sync.Invoke(panel,null)!).GetAwaiter().GetResult();
+    window.UpdateLayout();Dispatcher.UIThread.RunJobs();
+    var statusText=panel.FindControl<StackPanel>("DraftCards")!.GetVisualDescendants().OfType<TextBlock>().Single(x=>x.Text=="处理状态："+label);
+    if(statusText.Bounds.Width<=0||statusText.Bounds.Right>((Control)statusText.Parent!).Bounds.Width+1)throw new Exception("Status label clipped");
+    if(code=="completed"){WaitAnimation();using(var frame=window.CaptureRenderedFrame())frame!.Save("artifacts/feedback-reference/processing-status.png");}
+}
+var legacy=FeedbackService.ParseComments("{\"items\":[{\"id\":\"legacy\",\"message\":\"old\",\"nickname\":\"R\",\"created_at\":0}],\"page\":1,\"total\":1}");
+if(legacy.Items.Single().ProcessingStatusLabel!="待处理")throw new Exception("Legacy endpoint misrepresented");
+Console.WriteLine("PASS: status parsing, old endpoint fallback, refresh transitions and narrow sidebar labels");
 readField.SetValue(panel,(Func<int,Task<FeedbackService.PublicPage>>)(_=>Task.FromResult(new FeedbackService.PublicPage(new(),1,0))));
 ((Task)sync.Invoke(panel,null)!).GetAwaiter().GetResult();
 if(panel.FindControl<StackPanel>("DraftCards")!.Children.OfType<Border>().Any())throw new Exception("Cleared comments remain");

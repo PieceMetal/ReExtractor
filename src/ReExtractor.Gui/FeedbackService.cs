@@ -11,13 +11,25 @@ namespace ReExtractor.Gui;
 
 public static class FeedbackService
 {
-    public sealed record PublicComment(string Id,string Message,string Nickname,DateTimeOffset CreatedAt);
+    public sealed record PublicComment(string Id,string Message,string Nickname,DateTimeOffset CreatedAt,string ProcessingStatus = "unknown")
+    {
+        public string ProcessingStatusLabel => ProcessingStatus switch
+        {
+            "confirmed" or "processed" => "已处理",
+            "accepted" or "planning" or "running" or "completed" or "cancellation_requested" or "processing" => "正在处理",
+            _ => "待处理"
+        };
+    }
     public sealed record PublicPage(List<PublicComment> Items,int Page,int Total);
     public static async Task<PublicPage> ReadCommentsAsync(int page){
         using var response=await Client.GetAsync(Endpoint.Replace("/feedback","/comments")+"?page="+page);
-        response.EnsureSuccessStatusCode();using var data=JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        response.EnsureSuccessStatusCode();return ParseComments(await response.Content.ReadAsStringAsync());
+    }
+    public static PublicPage ParseComments(string json){
+        using var data=JsonDocument.Parse(json);
         var root=data.RootElement;var items=new List<PublicComment>();
-        foreach(var x in root.GetProperty("items").EnumerateArray())items.Add(new(x.GetProperty("id").GetString()!,x.GetProperty("message").GetString()!,x.GetProperty("nickname").GetString()??"R友",DateTimeOffset.FromUnixTimeMilliseconds(x.GetProperty("created_at").GetInt64())));
+        foreach(var x in root.GetProperty("items").EnumerateArray())items.Add(new(x.GetProperty("id").GetString()!,x.GetProperty("message").GetString()!,x.GetProperty("nickname").GetString()??"R友",DateTimeOffset.FromUnixTimeMilliseconds(x.GetProperty("created_at").GetInt64()),
+            x.TryGetProperty("processing_status",out var status)&&status.ValueKind==JsonValueKind.String?status.GetString()??"unknown":"unknown"));
         return new(items,root.GetProperty("page").GetInt32(),root.GetProperty("total").GetInt32());
     }
     private static readonly Lazy<string> DeviceId = new(() => {

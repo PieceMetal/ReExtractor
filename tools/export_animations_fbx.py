@@ -1,7 +1,10 @@
-﻿import bpy
+import bpy
 import math
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fbx_export_profiles import prepare_export_axes, axis_options, export_target
 
 
 def arguments():
@@ -102,20 +105,17 @@ for index, source in enumerate(inputs, start=1):
     primary = armatures[0]
     primary.name = "Armature"
     primary.data.name = "Armature"
-    # Keep the skinned reference mesh in the animation FBX. Without a skin/cluster
-    # bind pose, animation-only FBX files make importers infer the skeleton rest
-    # transforms from the first animated frame. UE then applies those tracks to a
-    # different reference pose and character parts (especially head/face) separate.
-    # Users can leave UE's "Import Mesh" disabled when importing these as animations.
-    for mesh in (obj for obj in bpy.data.objects if obj.type == "MESH"):
-        mesh.name = "REEXTRACTOR_BIND_POSE_REFERENCE"
-        mesh.data.name = "REEXTRACTOR_BIND_POSE_REFERENCE"
+    # Animation FBX targets the skeleton imported with the separate model FBX.
+    # Keep the armature and its tracks, without duplicating reference geometry.
+    for mesh in [obj for obj in bpy.data.objects if obj.type == "MESH"]:
+        bpy.data.objects.remove(mesh, do_unlink=True)
     for duplicate in armatures[1:]:
         bpy.data.objects.remove(duplicate, do_unlink=True)
     armatures = [primary]
     if not ensure_export_root(primary):
         print("REEXTRACTOR_ROOT_MODE:EXPLICIT", flush=True)
 
+    prepare_export_axes()
     start_frame, end_frame = action_frame_range()
     scene.frame_start = int(start_frame)
     scene.frame_end = int(end_frame)
@@ -124,8 +124,8 @@ for index, source in enumerate(inputs, start=1):
     bpy.ops.object.select_all(action="DESELECT")
     for armature in armatures:
         armature.select_set(True)
-    for mesh in (obj for obj in bpy.data.objects if obj.type == "MESH"):
-        mesh.select_set(True)
+    if export_target() == "unity":
+        bpy.data.objects["AnimationHierarchy"].select_set(True)
     bpy.context.view_layer.objects.active = armatures[0]
 
     output_path = os.path.join(
@@ -134,7 +134,7 @@ for index, source in enumerate(inputs, start=1):
     bpy.ops.export_scene.fbx(
         filepath=output_path,
         use_selection=True,
-        object_types={"ARMATURE", "MESH", "EMPTY"},
+        object_types={"ARMATURE", "EMPTY"},
         bake_anim=True,
         bake_anim_use_all_actions=False,
         bake_anim_use_nla_strips=False,
@@ -145,9 +145,7 @@ for index, source in enumerate(inputs, start=1):
         global_scale=1.0,
         apply_unit_scale=True,
         apply_scale_options="FBX_SCALE_NONE",
-        axis_forward="Y",
-        axis_up="Z",
-        use_space_transform=False,
+        **axis_options(),
         primary_bone_axis="Z",
         secondary_bone_axis="X",
         armature_nodetype="NULL",

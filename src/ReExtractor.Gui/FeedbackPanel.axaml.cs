@@ -190,7 +190,16 @@ public partial class FeedbackPanel : UserControl
                 var header=new Grid{ColumnDefinitions=new ColumnDefinitions("*,Auto"),ColumnSpacing=8};
                 header.Children.Add(new TextBlock{Text=string.IsNullOrWhiteSpace(entry.Nickname)?"R友":entry.Nickname,Foreground=Brush.Parse("#8cbcff"),FontSize=13,FontWeight=FontWeight.SemiBold});
                 var time=new TextBlock{Text=entry.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm"),FontSize=11,Foreground=Brush.Parse("#98a6b8")};Grid.SetColumn(time,1);header.Children.Add(time);
-                content.Children.Add(header);content.Children.Add(new SelectableTextBlock{Text=entry.Message,TextWrapping=TextWrapping.Wrap});
+                content.Children.Add(header);
+                var statusColor=entry.ProcessingStatus switch {
+                    "confirmed" or "processed" => "#95dfb4",
+                    "processing" or "accepted" or "running" or "planning" or "completed" or "cancellation_requested" => "#9ccaff", _ => "#c3cedb"
+                };
+                content.Children.Add(new Border{Background=Brush.Parse("#1b2738"),CornerRadius=new CornerRadius(5),
+                    Padding=new Thickness(8,4),HorizontalAlignment=Avalonia.Layout.HorizontalAlignment.Left,
+                    Child=new TextBlock{Text="处理状态："+entry.ProcessingStatusLabel,FontSize=12,
+                        Foreground=Brush.Parse(statusColor),TextWrapping=TextWrapping.Wrap}});
+                content.Children.Add(new SelectableTextBlock{Text=entry.Message,TextWrapping=TextWrapping.Wrap});
                 DraftCards.Children.Add(new Border{Background=Brush.Parse("#263348"),CornerRadius=new CornerRadius(10),Padding=new Thickness(14),Child=content});
             }
             var pages=Math.Max(1,(_publicComments.Total+19)/20);

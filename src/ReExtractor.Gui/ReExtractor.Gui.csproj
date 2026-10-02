@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>1.4.5</Version>
-    <AssemblyVersion>1.4.5.0</AssemblyVersion>
-    <FileVersion>1.4.5.0</FileVersion>
+    <Version>1.4.6</Version>
+    <AssemblyVersion>1.4.6.0</AssemblyVersion>
+    <FileVersion>1.4.6.0</FileVersion>
     <AssemblyName>ReExtractor-v$(Version)</AssemblyName>
     <Authors>PieceMetal</Authors>
     <Description>RE Engine 资源解包、预览与 FBX 导出工具</Description>
@@ -41,6 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\..\tools\fbx_export_profiles.py" Link="EmbeddedTools\fbx_export_profiles.py" />
     <EmbeddedResource Include="..\..\tools\export_models_fbx.py" Link="EmbeddedTools\export_models_fbx.py" />
     <EmbeddedResource Include="..\..\tools\export_animations_fbx.py" Link="EmbeddedTools\export_animations_fbx.py" />
     <EmbeddedResource Include="..\..\GDeflateNet\GDeflateNet\runtimes\win-x64\native\libGDeflate.dll" Link="EmbeddedNative\libGDeflate.dll" />
