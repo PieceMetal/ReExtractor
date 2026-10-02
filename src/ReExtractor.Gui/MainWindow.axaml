@@ -8,6 +8,21 @@
         KeyDown="OnMainWindowKeyDown"
         Background="#16191f">
 
+  <Window.Styles>
+    <Style Selector="Button.export-folder /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#454d59"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="Button.export-folder:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#596779"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="Button.export-folder:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#344456"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+  </Window.Styles>
+
   <Grid ColumnDefinitions="*,Auto">
   <DockPanel Grid.Column="0" Margin="12">
     <Border x:Name="TitleStrip" DockPanel.Dock="Top" Margin="-12,-12,-12,0" Background="#20252d"
@@ -494,7 +509,7 @@
                       </MenuFlyout>
                     </SplitButton.Flyout>
                   </SplitButton>
-                  <Button Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
+                  <Button Classes="export-folder" Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
                 </Grid>
               </StackPanel>
             </Border>
@@ -570,7 +585,7 @@
                       </MenuFlyout>
                     </SplitButton.Flyout>
                   </SplitButton>
-                  <Button Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
+                  <Button Classes="export-folder" Grid.Column="1" Content="打开导出文件夹" Click="OnOpenOutputFolderClicked" Padding="10,7"/>
                 </Grid>
               </StackPanel>
             </Border>
@@ -608,3 +623,4 @@
   <local:FeedbackPanel x:Name="FeedbackSidebar" Grid.Column="1" Width="380" IsVisible="False"/>
   </Grid>
 </Window>
+

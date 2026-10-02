@@ -11,6 +11,26 @@ Environment.SetEnvironmentVariable("REEXTRACTOR_DATA_DIR",Path.GetFullPath("arti
 AppBuilder.Configure<Application>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).SetupWithoutStarting();
 Application.Current!.Styles.Add(new FluentTheme());Application.Current.RequestedThemeVariant=ThemeVariant.Dark;
 var main=new MainWindow();
+if(args.Length == 1 && args[0] == "--export-hover")
+{
+    main.Show(); Dispatcher.UIThread.RunJobs();
+    var buttons = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(main).OfType<Button>().Where(b => b.Classes.Contains("export-folder")).ToArray();
+    if(buttons.Length == 0) throw new Exception("Export folder button missing");
+    foreach(var button in buttons)
+    {
+        button.ApplyTemplate();
+        var presenter = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(button).OfType<Avalonia.Controls.Presenters.ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+        foreach(var state in new[] { "normal", ":pointerover", ":pressed" })
+        {
+            var pseudo = (Avalonia.Controls.IPseudoClasses)button.Classes;
+            pseudo.Set(":pointerover",state != "normal"); pseudo.Set(":pressed",state == ":pressed");
+            Dispatcher.UIThread.RunJobs();
+            if(presenter.Background is not Avalonia.Media.ISolidColorBrush brush || brush.Color.A != 255) throw new Exception("Transparent export button: " + state);
+            Console.WriteLine(state + " " + brush.Color);
+        }
+    }
+    main.Close(); Console.WriteLine("EXPORT_FOLDER_OPAQUE_STATES_PASS"); return;
+}
 if(args.Length == 2 && args[0] is "--session" or "--session-dropdowns")
 {
     var task = (Task)typeof(MainWindow).GetMethod("LoadPreviewSessionAsync",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(main,[args[1]])!;
@@ -392,3 +412,4 @@ window.CaptureRenderedFrame()!.Save("artifacts/re4-audit/layers-wide.png");
 window.Width=420;window.Height=390;Dispatcher.UIThread.RunJobs();
 window.CaptureRenderedFrame()!.Save("artifacts/re4-audit/layers-narrow.png");
 window.Close();main.Close();Console.WriteLine("BASE_LAYER_SEPARATION_SELECTION_EXPORT_MAPPING_AND_LAYOUT_PASS");
+
