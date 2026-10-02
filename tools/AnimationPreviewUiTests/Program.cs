@@ -14,7 +14,7 @@ var main=new MainWindow();
 if(args.Length == 1 && args[0] == "--export-hover")
 {
     main.Show(); Dispatcher.UIThread.RunJobs();
-    var buttons = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(main).OfType<Button>().Where(b => b.Classes.Contains("export-folder")).ToArray();
+    var buttons = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(main).OfType<Button>().Where(b => b.Classes.Contains("export-folder") || b.Name == "FeedbackLauncher").ToArray();
     if(buttons.Length == 0) throw new Exception("Export folder button missing");
     foreach(var button in buttons)
     {
@@ -26,7 +26,8 @@ if(args.Length == 1 && args[0] == "--export-hover")
             pseudo.Set(":pointerover",state != "normal"); pseudo.Set(":pressed",state == ":pressed");
             Dispatcher.UIThread.RunJobs();
             if(presenter.Background is not Avalonia.Media.ISolidColorBrush brush || brush.Color.A != 255) throw new Exception("Transparent export button: " + state);
-            Console.WriteLine(state + " " + brush.Color);
+            if(button.Name == "FeedbackLauncher" && brush.Color != Avalonia.Media.Color.Parse(state == "normal" ? "#2379d9" : state == ":pointerover" ? "#348beb" : "#185ca8")) throw new Exception("Feedback button lost its blue background");
+            Console.WriteLine(button.Name + " " + state + " " + brush.Color);
         }
     }
     main.Close(); Console.WriteLine("EXPORT_FOLDER_OPAQUE_STATES_PASS"); return;
@@ -412,4 +413,5 @@ window.CaptureRenderedFrame()!.Save("artifacts/re4-audit/layers-wide.png");
 window.Width=420;window.Height=390;Dispatcher.UIThread.RunJobs();
 window.CaptureRenderedFrame()!.Save("artifacts/re4-audit/layers-narrow.png");
 window.Close();main.Close();Console.WriteLine("BASE_LAYER_SEPARATION_SELECTION_EXPORT_MAPPING_AND_LAYOUT_PASS");
+
 

@@ -9,6 +9,14 @@
         Background="#16191f">
 
   <Window.Styles>
+    <Style Selector="Button#FeedbackLauncher:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#348beb"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="Button#FeedbackLauncher:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#185ca8"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
     <Style Selector="Button.export-folder /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="#454d59"/>
       <Setter Property="Foreground" Value="White"/>
