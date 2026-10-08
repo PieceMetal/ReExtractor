@@ -23,7 +23,7 @@ internal static class RawExportBoundary
             using var namesStream = pak.ReadFile(path);
             var actual = ViewportDataLoader.ListMotions(namesStream, path, pak.ReadFile);
             if (!actual.Select(m => m.SourceIndex).SequenceEqual(expected.Select(m => m.Index)) ||
-                !actual.Select(m => m.MotionNumber).SequenceEqual(expected.Select(m => m.Motion.motNumber)))
+                !actual.Select(m => m.MotionNumber).SequenceEqual(expected.Select(m => (int)m.Motion.motNumber)))
                 throw new Exception("RE4 generic source listing expanded inherited slots: " + path);
             if (bank == "wp4411h" && (!configuration.Sources!.Any(s => s.ListPath == path && s.SourcePath != path) ||
                 actual.Any(m => m.MotionNumber is 160 or 165 or 167)))
