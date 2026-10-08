@@ -4,8 +4,12 @@ using System.Text.Json;
 namespace ReExtractor.Core;
 
 public sealed record AnimationLayerCandidate(MotionInfo Motion, bool Confirmed, bool PreviewSupported);
-public sealed record AnimationLayerProfile(int BaseMaskId, int AdditiveMaskId, string? JointMapPath = null);
-public sealed record AnimationLayerPair(string Path, int BaseId, int AdditiveId, int BaseMaskId, int AdditiveMaskId, string? JointMapPath = null);
+public enum AnimationLayerComposition { UpperBodyStack, MotionTreeEndpoint, PlayerShootEndpoint }
+public sealed record AnimationLayerProfile(int BaseMaskId, int AdditiveMaskId, string? JointMapPath = null,
+    AnimationLayerComposition Composition = AnimationLayerComposition.UpperBodyStack, int? ClockMotionId = null);
+public sealed record AnimationLayerPair(string Path, int BaseId, int AdditiveId, int BaseMaskId, int AdditiveMaskId,
+    string? JointMapPath = null, AnimationLayerComposition Composition = AnimationLayerComposition.UpperBodyStack,
+    string? Context = null);
 
 public static class AnimationLayerCatalog
 {
@@ -24,14 +28,15 @@ public static class AnimationLayerCatalog
     private static string Name(MotionInfo motion) => motion.DisplayName.Split('（')[0].Trim();
     public static bool IsAdditive(MotionInfo motion) => Regex.IsMatch(Name(motion), @"_add(?:_|$)", RegexOptions.IgnoreCase);
 
-    public static bool IsAdditive(string path, MotionInfo motion, IReadOnlyList<AnimationLayerPair>? definitions = null)
+    public static bool IsAdditive(string path, MotionInfo motion, IReadOnlyList<AnimationLayerPair>? definitions = null,
+        IReadOnlyList<ResolvedAnimationUsage>? usages = null)
     {
         if (definitions != null)
         {
             if (PairsFor(path, motion.MotionNumber, definitions).Any()) return false;
             if (definitions.Any(p => p.AdditiveId == motion.MotionNumber && p.Path.Equals(path.Replace('\\','/'), StringComparison.OrdinalIgnoreCase))) return true;
         }
-        return AnimationUsageCatalog.Get(path, motion).RequiresRawInspection;
+        return AnimationUsageCatalog.Get(path, motion, definitions, usages).RequiresRawInspection;
     }
 
     public static bool UsesReloadMask(string path, int basis, int overlay, IReadOnlyList<AnimationLayerPair>? definitions = null) => PairsFor(path, basis, definitions)
@@ -47,14 +52,16 @@ public static class AnimationLayerCatalog
         // Pair confirmation is separate (AnimationLayerCandidate.Confirmed).
         var candidates = PairsFor(path, basis, definitions).ToArray();
         var paired = candidates.FirstOrDefault(p => p.AdditiveId == overlay) ?? candidates.FirstOrDefault();
-        return paired == null ? null : new(paired.BaseMaskId, paired.AdditiveMaskId, paired.JointMapPath);
+        return paired == null ? null : new(paired.BaseMaskId, paired.AdditiveMaskId, paired.JointMapPath,
+            paired.Composition, paired.Composition == AnimationLayerComposition.MotionTreeEndpoint ? paired.AdditiveId : null);
     }
 
-    public static IReadOnlyList<AnimationLayerCandidate> Find(string path, MotionInfo basis, IReadOnlyList<MotionInfo> motions, IReadOnlyList<AnimationLayerPair>? definitions = null)
+    public static IReadOnlyList<AnimationLayerCandidate> Find(string path, MotionInfo basis, IReadOnlyList<MotionInfo> motions,
+        IReadOnlyList<AnimationLayerPair>? definitions = null, IReadOnlyList<ResolvedAnimationUsage>? usages = null)
     {
-        if (IsAdditive(path, basis, definitions)) return Array.Empty<AnimationLayerCandidate>();
+        if (IsAdditive(path, basis, definitions, usages)) return Array.Empty<AnimationLayerCandidate>();
         var ids = PairsFor(path, basis.MotionNumber, definitions).Select(p => p.AdditiveId).ToHashSet();
-        return motions.Where(m => IsAdditive(path, m, definitions))
+        return motions.Where(m => IsAdditive(path, m, definitions, usages))
             .Where(m => ids.Contains(m.MotionNumber))
             .Select(m => new AnimationLayerCandidate(m, true,
                 GetProfile(path, basis.MotionNumber, m.MotionNumber, definitions) != null))

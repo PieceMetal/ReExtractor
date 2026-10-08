@@ -4,8 +4,13 @@ using System.Runtime.CompilerServices;
 
 namespace ReExtractor.Core;
 
-public sealed record ResolvedAnimationLayers(IReadOnlyList<AnimationLayerPair> Pairs, IReadOnlyList<string> Diagnostics)
+public sealed record ResolvedAnimationLayers(IReadOnlyList<AnimationLayerPair> Pairs, IReadOnlyList<string> Diagnostics,
+    IReadOnlyList<ResolvedAnimationMotion>? Sources = null, IReadOnlyList<ResolvedAnimationUsage>? Usages = null)
 {
+    public IReadOnlyList<MotionInfo> PreviewMotions(string path, IReadOnlyList<MotionInfo> embedded)
+        => embedded.Concat((Sources ?? []).Where(s => s.ListPath.Equals(path.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)
+            && !embedded.Any(m => m.SourceIndex == s.Motion.SourceIndex)).Select(s => s.Motion))
+            .OrderBy(m => m.SourceIndex).ToArray();
     public AnimationLayerPair[] ForList(string path, IReadOnlyList<MotionInfo> motions)
     {
         var ids = motions.GroupBy(m => m.MotionNumber).Where(g => g.Count() == 1).Select(g => g.Key).ToHashSet();
@@ -49,8 +54,10 @@ public static class Re4AnimationLayerResolver
 
     private static ResolvedAnimationLayers Build(PakService pak)
     {
-        var diagnostics = new List<string>();
-        var pairs = new List<AnimationLayerPair>();
+        var railCar = Re4RailCarAnimationResolver.Resolve(pak);
+        var shoot = Re4PlayerShootAnimationResolver.Resolve(pak);
+        var diagnostics = new List<string>(railCar.Diagnostics.Concat(shoot.Diagnostics));
+        var pairs = new List<AnimationLayerPair>(railCar.Pairs);
         var paths = pak.EnumerateFiles().Select(f => f.Path).ToArray();
         string Resource(string reference)
         {
@@ -157,8 +164,8 @@ public static class Re4AnimationLayerResolver
                 if(group.Count() != 1) { diagnostics.Add($"配对上下文不唯一：{group.Key}"); continue; }
                 consistent.Add(group.Single());
             }
-            return new(consistent,diagnostics);
+            return new(consistent.Concat(shoot.Pairs).ToArray(),diagnostics,shoot.Sources,shoot.Usages);
         }
-        catch(Exception e) { diagnostics.Add(e.GetType().Name+": "+e.Message); return new([],diagnostics); }
+        catch(Exception e) { diagnostics.Add(e.GetType().Name+": "+e.Message); return new(railCar.Pairs.Concat(shoot.Pairs).ToArray(),diagnostics,shoot.Sources,shoot.Usages); }
     }
 }

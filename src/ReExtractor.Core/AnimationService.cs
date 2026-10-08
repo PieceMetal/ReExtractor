@@ -20,15 +20,16 @@ public sealed class AnimationService
         Stream motlistStream, string motlistPath,
         int motionIndex,
         string outputDirectory,
-        Action<int, int>? progress = null)
+        Action<int, int>? progress = null,
+        Func<string, Stream?>? fileResolver = null)
     {
-        using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
-        if (!motlist.Read()) throw new InvalidDataException($"Failed to parse .motlist: {motlistPath}");
+        using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+        var motlist = resolved.List;
         if (motionIndex < 0 || motionIndex >= motlist.Motions.Count)
             throw new ArgumentOutOfRangeException(nameof(motionIndex), $"Motion index {motionIndex} out of range ({motlist.Motions.Count} motions)");
         var motion = motlist.Motions[motionIndex];
         if (motion.MotFile is not MotFile mot)
-            throw new NotSupportedException($"Motion {motionIndex} has no embedded .mot data");
+            throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据：{motlistPath}");
 
         Directory.CreateDirectory(outputDirectory);
         var stem = Path.GetFileName(motlistPath);
@@ -49,10 +50,11 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         ViewportMesh skeletonMesh,
         Stream motlistStream, string motlistPath,
         string outputDirectory,
-        Action<int, int>? progress = null)
+        Action<int, int>? progress = null,
+        Func<string, Stream?>? fileResolver = null)
     {
-        using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
-        if (!motlist.Read()) throw new InvalidDataException($"Failed to parse .motlist: {motlistPath}");
+        using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+        var motlist = resolved.List;
         Directory.CreateDirectory(outputDirectory);
         var stem = Path.GetFileName(motlistPath);
         var marker = stem.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
@@ -82,11 +84,12 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         Stream meshStream, string meshPath,
         Stream motlistStream, string motlistPath,
         string outputDirectory,
-        Action<int, int>? progress = null)
+        Action<int, int>? progress = null,
+        Func<string, Stream?>? fileResolver = null)
     {
         using var mesh = MeshService.LoadMesh(meshStream, meshPath);
-        using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
-        if (!motlist.Read()) throw new InvalidDataException($"无法解析动画列表：{motlistPath}");
+        using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+        var motlist = resolved.List;
         Directory.CreateDirectory(outputDirectory);
         var stem = Path.GetFileName(motlistPath);
         var marker = stem.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
@@ -113,17 +116,17 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
     public string ConvertToGlbWithAnimation(
         Stream meshStream, string meshPath,
         Stream motlistStream, string motlistPath,
-        string outputPath, int motionIndex = 0)
+        string outputPath, int motionIndex = 0,
+        Func<string, Stream?>? fileResolver = null)
     {
         using var mesh = MeshService.LoadMesh(meshStream, meshPath);
-        using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
-        if (!motlist.Read())
-            throw new InvalidDataException($"Failed to parse .motlist: {motlistPath}");
+        using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+        var motlist = resolved.List;
 
         var motion = motlist.Motions.ElementAtOrDefault(motionIndex)
             ?? throw new InvalidDataException($"Motion index {motionIndex} out of range ({motlist.Motions.Count} motions)");
         if (motion.MotFile is not MotFile mot)
-            throw new NotSupportedException("Motion has no embedded .mot data (external mot link not supported yet)");
+            throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据：{motlistPath}");
 
         return WriteMotionGlb(mesh, mot, motion.motNumber, outputPath, motlistPath);
     }

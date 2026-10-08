@@ -160,7 +160,7 @@ switch (command)
         var glbName = Path.GetFileNameWithoutExtension(motlistPath) + $".mot{motionIndex}.glb";
         var outPath = Path.Combine(outDir, glbName);
         var anim = new AnimationService();
-        anim.ConvertToGlbWithAnimation(meshMs, meshPath, motMs, motlistPath, outPath, motionIndex);
+        anim.ConvertToGlbWithAnimation(meshMs, meshPath, motMs, motlistPath, outPath, motionIndex, pak.ReadFile);
         Console.WriteLine($"[anim2glb] -> {outPath}");
         return 0;
     }
@@ -247,7 +247,7 @@ switch (command)
             }, loadTextures: false);
         using var motStream = pak.ReadFile(motlistPath);
         var clip = ViewportDataLoader.LoadAnimation(
-            motStream, motlistPath, motionIndex, viewportMesh.Bones.Select(b => b.Name).ToArray());
+            motStream, motlistPath, motionIndex, viewportMesh.Bones.Select(b => b.Name).ToArray(), fileResolver: pak.ReadFile);
 
         var names = new HashSet<string>(
             viewportMesh.Bones.Select(b => b.Name),
@@ -438,7 +438,7 @@ switch (command)
         using var meshMs = pak.ReadFile(meshPath);
         using var motMs = pak.ReadFile(motlistPath);
         var outputs = new AnimationService().ConvertAllToGlbWithAnimation(
-            meshMs, meshPath, motMs, motlistPath, outDir);
+            meshMs, meshPath, motMs, motlistPath, outDir, fileResolver: pak.ReadFile);
         Console.WriteLine($"[animall2glb] exported={outputs.Count} first={outputs.FirstOrDefault()} last={outputs.LastOrDefault()}");
         return 0;
     }
@@ -447,7 +447,7 @@ switch (command)
         var motlistPath = positional.ElementAtOrDefault(1);
         if (motlistPath == null) { Console.WriteLine("motembedded requires a motlist path"); return 1; }
         using var motMs = pak.ReadFile(motlistPath);
-        var motions = ViewportDataLoader.ListMotions(motMs, motlistPath);
+        var motions = ViewportDataLoader.ListMotions(motMs, motlistPath, pak.ReadFile);
         Console.WriteLine($"[motembedded] exportable={motions.Count}");
         foreach (var motion in motions.Take(10))
             Console.WriteLine($"  source={motion.SourceIndex} id={motion.MotionNumber} {motion.DisplayName}");

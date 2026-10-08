@@ -12,6 +12,8 @@ public static class AnimationPreviewMixer
 文件名中的 motion 是源列表索引，id 是游戏动作编号。附加轨道不能作为完整动作直接播放；识别同时参考名称和已核实的游戏层配置，161持枪危险状态循环、520空弹动作及500/501/502射击轨道虽然没有add后缀，也属于附加轨道。确认轨道类型不代表已确认可配对的主动作。
 RE4 cha0_wp4000h 支持17组配置配对，涵盖持枪起止、拔枪收枪、换弹起手与收尾及装填爆炸物。选择这些动作会自动启用对应附加层，也可选择“不叠加”作对比。组合使用站姿参考，先应用附加层3，再用上半身层4覆盖；按各状态及其父状态读取游戏 JMAP 遮罩，包括普通3/4、换弹3/14、持枪结束10/11。被上层完全覆盖的通道不会重复叠加。不叠加和0%使用同一参考姿势；查看源动作请启用“单独检查原始轨道”。
 普通预览的附加列表仅显示游戏配置已确认的配对；同名或编号相近的轨道不会作为可选配对。尚未核实的主动作只提供“不叠加”，不代表游戏没有附加层。高级选项仅支持单独检查原始轨道，尚不支持自由组合或N层编辑。界面“主动作”指所选动作，底层移动姿势当前以静态站姿代替。预览按原速从零时刻同步，以主动作时长为准，短轨道保持末帧。
+RE4 矿车 cha0_tram 的已确认射击树另用固定方向预览：选择101正中、111左侧或121右侧持枪循环，自动叠加130射击；先应用持枪姿势，再应用局部附加增量和游戏骨骼遮罩。检查时长取射击轨道，关闭叠加保持相同时间与持枪姿势。未求值实时YawBlend、状态机计时或IK，不代表矿车的完整游戏运行效果。
+RE4 普通枪械的持枪和射击动作树使用另一层序：主层0的完整持枪姿态，再叠加附加层5的射击增量。读取实际玩家配置和武器库后，选择160持枪循环、165左转或167右转输入，可明确选择500/501/502射击变体，也可关闭叠加。继承的基础姿态仅按BaseMotListPath读取，并标明来源。此预览按所选主动作原速播放，短射击轨道保持末帧；未求值WheelBlendRate/WheelSpeed、随机选择、其他状态和IK，不能代表完整游戏运行效果。
 未模拟底层移动动作、状态切换、动态权重或 IK，站姿参考预览不等于游戏运行效果。全部动画及批量导出保留所选基础/附加资源原轨道。在目标引擎中需要按层序、遮罩、参考姿势和权重重新组合，不能把所有 add 都加在最终动作之上。
 RE4 部分列表引用 BaseMotListPath；当前导出只包含本列表内嵌动作，引用内容不保证完整，请另外导出基础列表。
 """;
@@ -112,6 +114,80 @@ RE4 部分列表引用 BaseMotListPath；当前导出只包含本列表内嵌动
             result.NamedTracks[bone.Name] = track;
         }
         return result;
+    }
+
+    /// <summary>
+    /// Fixed input of the rail-car direction blend, followed by local AddBlend.
+    /// The shot clip supplies a bounded inspection clock, even when ADD is off.
+    /// This does not emulate the FSM timer or runtime direction synchronization.
+    /// </summary>
+    public static AnimationClip ComposeMotionTreeEndpoint(AnimationClip basis, AnimationClip? overlay,
+        AnimationClip clock, IReadOnlyList<ViewportBone> bones,
+        IReadOnlyDictionary<string, PreviewJointWeight> baseMask,
+        IReadOnlyDictionary<string, PreviewJointWeight> additiveMask, float weight = 1)
+        => ComposePoseThenAdd(basis, overlay, clock, bones, baseMask, additiveMask, weight);
+
+    /// <summary>Player layer 0 full-body hold followed by layer 5 local recoil.
+    /// The selected hold controls the inspection clock; runtime wheel speed and
+    /// random shot choice are represented by explicit fixed inputs, not simulated.</summary>
+    public static AnimationClip ComposePlayerShootEndpoint(AnimationClip basis, AnimationClip? overlay,
+        IReadOnlyList<ViewportBone> bones, IReadOnlyDictionary<string, PreviewJointWeight> baseMask,
+        IReadOnlyDictionary<string, PreviewJointWeight> additiveMask, float weight = 1)
+        => ComposePoseThenAdd(basis, overlay, basis, bones, baseMask, additiveMask, weight);
+
+    private static AnimationClip ComposePoseThenAdd(AnimationClip basis, AnimationClip? overlay,
+        AnimationClip clock, IReadOnlyList<ViewportBone> bones,
+        IReadOnlyDictionary<string, PreviewJointWeight> baseMask,
+        IReadOnlyDictionary<string, PreviewJointWeight> additiveMask, float weight)
+    {
+        if (!float.IsFinite(clock.Duration) || clock.Duration <= 0)
+            throw new InvalidDataException("组合预览没有有效的检查时长");
+        weight = Math.Clamp(weight, 0, 1);
+        if (weight == 0) overlay = null;
+        var fps = Math.Clamp(Math.Max(basis.FrameRate, clock.FrameRate), 1, 240);
+        var count = (int)MathF.Ceiling(clock.Duration * fps);
+        var times = Enumerable.Range(0, count + 1).Select(i => Math.Min(i / (float)fps, clock.Duration)).ToArray();
+        var result = new AnimationClip { Name = basis.Name + (overlay == null ? "" : " + " + overlay.Name),
+            Duration = clock.Duration, FrameRate = fps, FrameCount = count, Tracks = new() };
+        for (var i = 0; i < bones.Count; i++)
+        {
+            var bone = bones[i];
+            basis.NamedTracks.TryGetValue(bone.Name, out var b);
+            BoneTrack? a = null;
+            overlay?.NamedTracks.TryGetValue(bone.Name, out a);
+            Matrix4x4.Decompose(bone.LocalBind, out var bindS, out var bindQ, out var bindT);
+            var absolute = baseMask.GetValueOrDefault(bone.Name);
+            var add = additiveMask.GetValueOrDefault(bone.Name);
+            var track = new BoneTrack { TransTimes = times, RotTimes = times,
+                Translations = new Vector3[times.Length], Rotations = new Quaternion[times.Length] };
+            if (b?.Scales is { Length: > 0 } && b.ScaleTimes is { Length: > 0 })
+            {
+                track.ScaleTimes = times;
+                track.Scales = new Vector3[times.Length];
+            }
+            for (var f = 0; f < times.Length; f++)
+            {
+                var time = times[f];
+                var baseT = Vector3.Lerp(bindT, Translation(b, time, bindT), Math.Clamp(absolute.Translation, 0, 1));
+                var baseQ = Quaternion.Slerp(bindQ, Rotation(b, time, bindQ), Math.Clamp(absolute.Rotation, 0, 1));
+                // Unlike the upper-body stack, this tree adds AFTER its absolute
+                // hold pose. Root channels follow the tree mask as well.
+                track.Translations[f] = baseT + TranslationDelta(a, time) * (weight * Math.Clamp(add.Translation, 0, 1));
+                track.Rotations[f] = Quaternion.Normalize(baseQ * Quaternion.Slerp(Quaternion.Identity,
+                    RotationDelta(a, time), weight * Math.Clamp(add.Rotation, 0, 1)));
+                if (track.Scales != null) track.Scales[f] = Scale(b!, time, bindS);
+            }
+            result.Tracks[i] = track;
+            result.NamedTracks[bone.Name] = track;
+        }
+        return result;
+    }
+
+    private static Vector3 Scale(BoneTrack track, float time, Vector3 bind)
+    {
+        if (track.Scales is not { Length: > 0 } values || track.ScaleTimes is not { Length: > 0 } times) return bind;
+        var (a, b, w) = Segment(times, time);
+        return Vector3.Lerp(values[Math.Min(a, values.Length - 1)], values[Math.Min(b, values.Length - 1)], w);
     }
     private static AnimationClip Copy(AnimationClip source)
     {

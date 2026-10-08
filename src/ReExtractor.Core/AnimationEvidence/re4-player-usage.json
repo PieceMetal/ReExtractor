@@ -1,5 +1,14 @@
 [
   {
+    "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_tram.motlist.663",
+    "Id": 130,
+    "Name": "cha0_tram_0130_shoot",
+    "Kind": "Additive",
+    "Evidence": [
+      "RailCar_Pl.motbank.3 bank=1 -> RailCar_Tree_Shoot (1001), AddBlendNode input=1, BaseNo=0, BlendRate=1, WorldRotation=false"
+    ]
+  },
+  {
     "Path": "natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_damage.motlist.663",
     "Id": 1,
     "Name": "cha0_damage_0001_medium_start",

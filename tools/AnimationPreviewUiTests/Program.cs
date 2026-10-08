@@ -64,12 +64,16 @@ if(args.Length == 2 && args[0] is "--session" or "--session-dropdowns")
             var candidates = (IReadOnlyList<MotionInfo>)typeof(MainWindow).GetField("_relatedPreviewMotions",binding)!.GetValue(main)!;
             Console.WriteLine($"LIVE_SELECTION {pair.Item1} raw={rawToggle.IsChecked} items={addCombo.ItemCount}: "
                 + string.Join(" | ",addCombo.Items.Cast<ComboBoxItem>().Select(c=>c.Content)));
-            if(candidates.Count != 1 || candidates[0].MotionNumber != pair.Item2 || addCombo.ItemCount != 2 || addCombo.SelectedIndex != 1)
+            var expectedPairIds = livePairs.Where(p => p.BaseId == pair.Item1).Select(p => p.AdditiveId).Order().ToArray();
+            if(!candidates.Select(c => c.MotionNumber).Order().SequenceEqual(expectedPairIds)
+                || addCombo.ItemCount != candidates.Count + 1 || addCombo.SelectedIndex < 1)
                 throw new Exception("Live selection lost paired motion");
+            var chosen = candidates.Single(c => c.MotionNumber == pair.Item2);
+            addCombo.SelectedIndex = candidates.ToList().FindIndex(c => c.MotionNumber == pair.Item2) + 1;
             until = DateTime.UtcNow.AddSeconds(20);
             do { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
-            while ((int)typeof(MainWindow).GetField("_loadedAdditiveSource",binding)!.GetValue(main)! != candidates[0].SourceIndex && DateTime.UtcNow < until);
-            if((int)typeof(MainWindow).GetField("_loadedAdditiveSource",binding)!.GetValue(main)! != candidates[0].SourceIndex)
+            while ((int)typeof(MainWindow).GetField("_loadedAdditiveSource",binding)!.GetValue(main)! != chosen.SourceIndex && DateTime.UtcNow < until);
+            if((int)typeof(MainWindow).GetField("_loadedAdditiveSource",binding)!.GetValue(main)! != chosen.SourceIndex)
                 throw new Exception("Live paired selection did not load");
         }
         Console.WriteLine("LIVE_DROPDOWN_AND_PAIR_PLAYBACK_PASS");

@@ -17,6 +17,7 @@ public partial class MainWindow
         public string MotionListPath { get; set; } = "";
         public int BaseId { get; set; }
         public int? AdditiveId { get; set; }
+        public float? PauseAtSeconds { get; set; }
 
     }
 
@@ -60,11 +61,17 @@ public partial class MainWindow
             if (!Viewport.HasAnimation || _loadedMotionSource != SelectedBaseMotion?.SourceIndex
                 || _loadedAdditiveSource != (SelectedAdditiveMotion?.SourceIndex ?? -1))
                 throw new InvalidDataException("动画未加载：" + ActionStatus.Text);
+            if (session.PauseAtSeconds is { } time)
+            {
+                if (!float.IsFinite(time)) throw new InvalidDataException("预览检查时间无效");
+                Viewport.PausePlayback();
+                Viewport.ScrubTo(time);
+            }
             Title += " · 动画分层本地测试";
             await File.WriteAllTextAsync(sessionPath + ".result.json", JsonSerializer.Serialize(new {
                 Ready = true, BaseId = SelectedBaseMotion?.MotionNumber,
                 AdditiveId = SelectedAdditiveMotion?.MotionNumber,
-                Meshes = _previewMeshPaths, Playing = Viewport.IsPlaying, Viewport.Duration,
+                Meshes = _previewMeshPaths, Playing = Viewport.IsPlaying, Viewport.Duration, Viewport.CurrentTime,
                 Status = ActionStatus.Text, Profile = BlendPreviewDescription.Text
             }, new JsonSerializerOptions { WriteIndented = true }));
         }

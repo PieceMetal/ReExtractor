@@ -55,16 +55,13 @@ static class PreviewRegression
         Console.WriteLine($"TIME_AND_ZERO_SOURCE_EQUALITY_PASS base={basis.Duration} zero={zero.Duration} active={active.Duration}");
         var hold = motions.Single(m => m.MotionNumber == 160);
         var candidates = AnimationLayerCatalog.Find(path, hold, motions);
-        Check(candidates.Select(c => c.Motion.MotionNumber).Order().SequenceEqual(new[] { 500, 501, 502 }), "Shoot candidates missing");
+        Check(candidates.Count == 0, "Unverified 160 shoot pairing must stay hidden");
         foreach (var id in new[] { 500, 501, 502 })
         {
             var motion = motions.Single(m => m.MotionNumber == id);
             Check(AnimationLayerCatalog.IsAdditive(path, motion) && !AnimationLayerCatalog.IsAdditive("other.motlist.663", motion), "Shoot scope incorrect");
-            var b = Load(160); var a = Load(id);
-            var mix = AnimationPreviewMixer.Compose(b, a, mesh.Bones, 1);
-            Check(mix.Duration == a.Duration && mix.Duration > 0, "Static hold froze shoot");
-            Check(mix.NamedTracks["Hip"].Translations![0].Y > .9f, "Shoot collapsed hip to raw zero");
-            Console.WriteLine($"SHOOT_{id}_ON_HOLD_PASS duration={mix.Duration} hipY={mix.NamedTracks["Hip"].Translations![0].Y}");
+            Check(AnimationLayerCatalog.Find(path, motion, motions).Count == 0, "Additive clip exposed as a base");
+            Console.WriteLine($"SHOOT_{id}_RAW_USAGE_ONLY_PASS");
         }
         var scaled = Load(541);
         scaled.NamedTracks["Hip"].ScaleTimes = [0, .25f, scaled.Duration];

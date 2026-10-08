@@ -26,9 +26,20 @@ public static class AnimationUsageCatalog
         return rows.ToDictionary(e => Key(e.Path, e.Id, e.Name),
             e => new AnimationUsage(Enum.Parse<AnimationUsageKind>(e.Kind), e.Evidence), StringComparer.OrdinalIgnoreCase);
     }
-    public static AnimationUsage Get(string path, MotionInfo motion)
+    public static AnimationUsage Get(string path, MotionInfo motion, IReadOnlyList<AnimationLayerPair>? definitions = null,
+        IReadOnlyList<ResolvedAnimationUsage>? usages = null)
     {
         var name = motion.DisplayName.Split('（')[0].Trim();
+        var liveUsage = usages?.SingleOrDefault(u => Key(u.Path, u.Id, u.Name).Equals(
+            Key(path, motion.MotionNumber, name), StringComparison.OrdinalIgnoreCase));
+        if (liveUsage != null) return liveUsage.Usage;
+        if (definitions != null)
+        {
+            var uses = definitions.Where(p => p.Path.Equals(path.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)
+                && p.AdditiveId == motion.MotionNumber).ToArray();
+            if (uses.Length > 0)
+                return new(AnimationUsageKind.Additive, uses.Select(p => p.Context ?? "Loaded game layer configuration").Distinct().ToArray());
+        }
         if (Entries.TryGetValue(Key(path, motion.MotionNumber, name), out var usage)) return usage;
         // Retain the separately audited shoot variants. No extrapolation to other banks/lists.
         if (path.Replace('\\','/').Equals("natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_wp4000h.motlist.663", StringComparison.OrdinalIgnoreCase)

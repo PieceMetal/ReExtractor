@@ -17,7 +17,7 @@ static class RuntimePairAudit
         foreach(var path in configuration.Pairs.Select(p=>p.Path).Distinct().Order())
         {
             using var ns=pak.ReadFile(path);
-            var motions=ViewportDataLoader.ListMotions(ns,path);
+            var motions=configuration.PreviewMotions(path,ViewportDataLoader.ListMotions(ns,path));
             var pairs=configuration.ForList(path,motions);
             allPairs.AddRange(pairs);
             using var ms=pak.ReadFile(meshPath);
@@ -26,8 +26,8 @@ static class RuntimePairAudit
             AnimationClip Load(int id)
             {
                 if(clips.TryGetValue(id,out var clip))return clip;
-                using var s=pak.ReadFile(path);
-                return clips[id]=ViewportDataLoader.LoadAnimation(s,path,motions.Single(m=>m.MotionNumber==id).SourceIndex,sceneMeshes:new[]{mesh});
+                return clips[id]=Re4AnimationResourceCatalog.LoadPreview(pak,path,motions.Single(m=>m.MotionNumber==id).SourceIndex,
+                    configuration,meshes:new[]{mesh});
             }
             var errors=new List<string>();
             foreach(var pair in pairs)
@@ -40,7 +40,10 @@ static class RuntimePairAudit
                     var addMask=AnimationPreviewProfiles.ReadRe4Mask(pak,mesh.Bones,profile.AdditiveMaskId,profile.JointMapPath);
                     foreach(var weight in new[]{0f,.5f,1f})
                     {
-                        var combined=AnimationPreviewMixer.ComposeUpperBody(basis,add,mesh.Bones,upperMask,addMask,weight);
+                        var combined=profile.Composition switch {
+                            AnimationLayerComposition.MotionTreeEndpoint=>AnimationPreviewMixer.ComposeMotionTreeEndpoint(basis,add,add,mesh.Bones,upperMask,addMask,weight),
+                            AnimationLayerComposition.PlayerShootEndpoint=>AnimationPreviewMixer.ComposePlayerShootEndpoint(basis,add,mesh.Bones,upperMask,addMask,weight),
+                            _=>AnimationPreviewMixer.ComposeUpperBody(basis,add,mesh.Bones,upperMask,addMask,weight)};
                         foreach(var track in combined.NamedTracks.Values)
                         {
                             if(track.Rotations!.Any(q=>!float.IsFinite(q.LengthSquared())||Math.Abs(q.LengthSquared()-1)>1e-4))throw new Exception("Invalid rotation");
@@ -48,7 +51,9 @@ static class RuntimePairAudit
                         }
                     }
                     var candidates=AnimationLayerCatalog.Find(path,motions.Single(m=>m.MotionNumber==pair.BaseId),motions,pairs);
-                    if(candidates.Count!=1||candidates[0].Motion.MotionNumber!=pair.AdditiveId)throw new Exception("Wrong live pair candidate");
+                    if(candidates.Count!=pairs.Count(p=>p.BaseId==pair.BaseId)
+                        ||!candidates.Any(c=>c.Motion.MotionNumber==pair.AdditiveId&&c.Confirmed&&c.PreviewSupported))
+                        throw new Exception("Wrong live pair candidate");
                 }
                 catch(Exception ex) { errors.Add($"{pair.BaseId}+{pair.AdditiveId}: {ex.Message}"); }
             }

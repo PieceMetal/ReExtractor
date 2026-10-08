@@ -1731,15 +1731,16 @@ public static class ViewportDataLoader
     }
 
     /// <summary>Lists all motions in a .motlist with readable labels (file base name + mot id).</summary>
-    public static IReadOnlyList<string> ListMotionNames(Stream motlistStream, string motlistPath)
-        => ListMotions(motlistStream, motlistPath).Select(motion => motion.DisplayName).ToList();
+    public static IReadOnlyList<string> ListMotionNames(Stream motlistStream, string motlistPath,
+        Func<string, Stream?>? fileResolver = null)
+        => ListMotions(motlistStream, motlistPath, fileResolver).Select(motion => motion.DisplayName).ToList();
 
-    /// <summary>Lists motions that contain embedded animation data, preserving their source indices.</summary>
-    public static IReadOnlyList<MotionInfo> ListMotions(Stream motlistStream, string motlistPath)
+    /// <summary>Lists readable local or inherited motions, preserving the selected list's source indices.</summary>
+    public static IReadOnlyList<MotionInfo> ListMotions(Stream motlistStream, string motlistPath,
+        Func<string, Stream?>? fileResolver = null)
     {
-        using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
-        if (!motlist.Read())
-            throw new InvalidDataException($"Failed to parse .motlist: {motlistPath}");
+        using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+        var motlist = resolved.List;
         var fileName = Path.GetFileName(motlistPath);
         var cut = fileName.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
         var baseName = cut > 0 ? fileName[..cut] : fileName;
@@ -1795,15 +1796,15 @@ public static class ViewportDataLoader
         string motlistPath,
         int motionIndex = 0,
         IReadOnlyList<string>? meshBoneNames = null,
-        IReadOnlyList<ViewportMesh>? sceneMeshes = null)
+        IReadOnlyList<ViewportMesh>? sceneMeshes = null,
+        Func<string, Stream?>? fileResolver = null)
     {
-        using var motlist = new MotlistFile(new FileHandler(motlistStream, motlistPath));
-        if (!motlist.Read())
-            throw new InvalidDataException($"Failed to parse .motlist: {motlistPath}");
+        using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+        var motlist = resolved.List;
         var motion = motlist.Motions.ElementAtOrDefault(motionIndex)
             ?? throw new InvalidDataException($"Motion index {motionIndex} out of range");
         if (motion.MotFile is not MotFile mot)
-            throw new NotSupportedException("Motion has no embedded .mot data");
+            throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据（基础列表未提供对应动作，或该槽位为动作树/外部动作链接）：{motlistPath}");
         var usesReferencePoseTracks = (int)mot.Header.version == 892;
 
         // Validate before appending helper bones: adding MOT bones must not make

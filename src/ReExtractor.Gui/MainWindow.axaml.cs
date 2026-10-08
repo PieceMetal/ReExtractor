@@ -2274,10 +2274,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private IReadOnlyList<MotionInfo> _relatedPreviewMotions = Array.Empty<MotionInfo>();
     private IReadOnlyList<AnimationLayerCandidate> _layerCandidates = Array.Empty<AnimationLayerCandidate>();
     private IReadOnlyList<AnimationLayerPair>? _previewLayerPairs;
+    private ResolvedAnimationLayers? _previewLayerConfiguration;
     private bool IsRe4Preview => _currentMotlistPath?.Contains("/_chainsaw/animation/", StringComparison.OrdinalIgnoreCase) == true
         && _currentMotlistPath.EndsWith(".motlist.663", StringComparison.OrdinalIgnoreCase);
     private bool HasOnlyAdditiveTracks => IsRe4Preview && _previewMotions.Count > 0
-        && _previewMotions.All(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs));
+        && _previewMotions.All(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs, _previewLayerConfiguration?.Usages));
     private MotionInfo? SelectedBaseMotion => (uint)MotionCombo.SelectedIndex < (uint)_visiblePreviewMotions.Count
         ? _visiblePreviewMotions[MotionCombo.SelectedIndex] : null;
     private MotionInfo? SelectedAdditiveMotion => AdditiveMotionCombo.SelectedIndex > 0
@@ -2295,7 +2296,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void PopulatePreviewMotionChoices(int preferredSource)
     {
         _visiblePreviewMotions = IsRe4Preview && ShowRawMotionTracks.IsChecked != true
-            ? _previewMotions.Where(m => !AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs)).ToArray()
+            ? _previewMotions.Where(m => !AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs, _previewLayerConfiguration?.Usages)).ToArray()
             : _previewMotions;
         _currentMotionIndices = _visiblePreviewMotions.Select(m => m.SourceIndex).ToArray();
         MotionCombo.ItemsSource = _visiblePreviewMotions.Select(m => m.DisplayName).ToArray();
@@ -2309,7 +2310,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     {
         AdditiveMotionCombo.IsEnabled = ShowRawMotionTracks.IsChecked != true;
         _layerCandidates = IsRe4Preview && ShowRawMotionTracks.IsChecked != true && SelectedBaseMotion is { } basis
-            ? AnimationLayerCatalog.Find(_currentMotlistPath!, basis, _previewMotions, _previewLayerPairs)
+            ? AnimationLayerCatalog.Find(_currentMotlistPath!, basis, _previewMotions, _previewLayerPairs, _previewLayerConfiguration?.Usages)
                 .Where(c => c.Confirmed).ToArray() : Array.Empty<AnimationLayerCandidate>();
         _relatedPreviewMotions = _layerCandidates.Select(c => c.Motion).ToArray();
         var items = new List<ComboBoxItem> { new() { Content = "不叠加" } };
@@ -2321,7 +2322,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         // Selecting a supported action previews its complete confirmed pair.
         // The first item remains available for an explicit no-overlay comparison.
         AdditiveMotionCombo.SelectedIndex = _relatedPreviewMotions.Count > 0 ? 1 : 0;
-        var adds = _previewMotions.Where(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs)).ToArray();
+        var adds = _previewMotions.Where(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs, _previewLayerConfiguration?.Usages)).ToArray();
         RawAdditiveInventory.Text = $"本资源列表的其他轨道（{adds.Length} 条）：\n"
             + string.Join("\n", adds.Select(m => m.DisplayName));
     }
@@ -2329,11 +2330,32 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void UpdateBlendPreviewDescription()
     {
         var combined = SelectedAdditiveMotion != null;
+        if (SelectedLayerProfile?.Composition == AnimationLayerComposition.PlayerShootEndpoint)
+        {
+            var inherited = _previewLayerConfiguration?.Sources?.SingleOrDefault(s => s.ListPath == _currentMotlistPath
+                && s.Motion.SourceIndex == SelectedBaseMotion?.SourceIndex && s.SourcePath != s.ListPath);
+            var neutral = combined && _previewLayerConfiguration?.Usages?.Any(u => u.Path == _currentMotlistPath
+                && u.Id == SelectedAdditiveMotion?.MotionNumber && u.IsNeutralDelta) == true;
+            BlendPreviewDescription.Text = (combined
+                ? "枪械射击 · 固定输入预览：完整持枪姿态后叠加所选射击变体；主动作控制时长，短射击轨道保持末帧。当前动画导出包含此组合。"
+                : "枪械射击 · 固定输入对照：仅播放所选完整持枪姿态，保持相同主动作时长。")
+                + " 未模拟实时转向、随机变体选择、状态切换与 IK。"
+                + (inherited == null ? "" : " 基础姿态继承自 " + Path.GetFileName(inherited.SourcePath) + "。")
+                + (neutral ? " 所选射击源轨道为零增量，不产生骨骼后坐力。" : "");
+            return;
+        }
+        if (SelectedLayerProfile?.Composition == AnimationLayerComposition.MotionTreeEndpoint)
+        {
+            BlendPreviewDescription.Text = combined
+                ? "矿车射击 · 固定方向预览：在所选持枪姿势上叠加射击轨道，使用射击轨道时长；未模拟方向混合、状态切换与 IK。当前动画导出包含此组合。"
+                : "矿车射击 · 固定方向对照：仅播放所选持枪姿势，使用相同的射击轨道时长；选择附加射击轨道可对比后坐力。";
+            return;
+        }
         BlendPreviewDescription.Text = combined
             ? SelectedLayerProfile != null
                 ? "游戏配置配对预览：底层使用静态站姿，先应用附加层，再覆盖上半身主动作。未模拟移动、动态权重与 IK；当前动画导出包含预览叠加。"
                 : "手动叠加预览：局部增量、按原速同步，短轨道停在末帧。此组合的游戏层序未确认；当前动画导出包含预览叠加。"
-            : SelectedBaseMotion is { } raw && AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, raw, _previewLayerPairs)
+            : SelectedBaseMotion is { } raw && AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, raw, _previewLayerPairs, _previewLayerConfiguration?.Usages)
                 ? "当前单独播放原始轨道。"
                 : _relatedPreviewMotions.Count > 0
                     ? "附加列表仅显示游戏配置已确认的配对。当前未启用附加层；底层使用静态站姿，主动作控制上半身。"
@@ -2407,8 +2429,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var request = ++_previewRequest;
         if (_pak == null) return;
         var layerProfile = SelectedLayerProfile;
+        var layerConfiguration = _previewLayerConfiguration;
         var confirmedPair = IsConfirmedLayerPair;
         var additiveSource = SelectedAdditiveMotion?.SourceIndex ?? -1;
+        var clockSource = layerProfile?.ClockMotionId is { } clockId
+            ? _previewMotions.Single(m => m.MotionNumber == clockId).SourceIndex : -1;
         const float weight = 1f;
         var motlistPath = _currentMotlistPath;
         var operation = ++_previewSeq;
@@ -2419,16 +2444,38 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         {
             var clip = await Task.Run(() =>
             {
-                using var baseMs = pak.ReadFile(motlistPath);
-                var basis = ViewportDataLoader.LoadAnimation(baseMs, motlistPath, selected.SourceIndex, meshBoneNames, sceneMeshes);
+                var basis = Re4AnimationResourceCatalog.LoadPreview(pak, motlistPath, selected.SourceIndex,
+                    layerConfiguration, meshBoneNames, sceneMeshes);
                 if (additiveSource < 0 && layerProfile == null) return basis;
                 AnimationClip? additive = null;
                 if (additiveSource >= 0)
                 {
-                    using var addMs = pak.ReadFile(motlistPath);
-                    additive = ViewportDataLoader.LoadAnimation(addMs, motlistPath, additiveSource, meshBoneNames, sceneMeshes);
+                    additive = Re4AnimationResourceCatalog.LoadPreview(pak, motlistPath, additiveSource,
+                        layerConfiguration, meshBoneNames, sceneMeshes);
                 }
                 var bones = AnimationSkeleton.PreviewBones(sceneMeshes);
+                if (layerProfile is { Composition: AnimationLayerComposition.PlayerShootEndpoint } shootProfile)
+                {
+                    var endpoint = AnimationPreviewMixer.ComposePlayerShootEndpoint(basis, additive, bones,
+                        AnimationPreviewProfiles.ReadRe4Mask(pak, bones, shootProfile.BaseMaskId, shootProfile.JointMapPath),
+                        AnimationPreviewProfiles.ReadRe4Mask(pak, bones, shootProfile.AdditiveMaskId, shootProfile.JointMapPath), weight);
+                    endpoint.Name += "（枪械射击 · 固定输入）";
+                    return endpoint;
+                }
+                if (layerProfile is { Composition: AnimationLayerComposition.MotionTreeEndpoint } treeProfile)
+                {
+                    var clock = additive;
+                    if (clock == null)
+                    {
+                        using var clockMs = pak.ReadFile(motlistPath);
+                        clock = ViewportDataLoader.LoadAnimation(clockMs, motlistPath, clockSource, meshBoneNames, sceneMeshes);
+                    }
+                    var endpoint = AnimationPreviewMixer.ComposeMotionTreeEndpoint(basis, additive, clock, bones,
+                        AnimationPreviewProfiles.ReadRe4Mask(pak, bones, treeProfile.BaseMaskId, treeProfile.JointMapPath),
+                        AnimationPreviewProfiles.ReadRe4Mask(pak, bones, treeProfile.AdditiveMaskId, treeProfile.JointMapPath), weight);
+                    endpoint.Name += "（矿车射击 · 固定方向）";
+                    return endpoint;
+                }
                 var combined = layerProfile is { } profile
                     ? AnimationPreviewMixer.ComposeUpperBody(basis, additive, bones,
                         AnimationPreviewProfiles.ReadRe4Mask(pak, bones, profile.BaseMaskId, profile.JointMapPath),
@@ -2462,19 +2509,17 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         return await Task.Run(() =>
         {
             using var namesStream = _pak.ReadFile(path);
-            var motions = ViewportDataLoader.ListMotions(namesStream, path);
-            if (motions.Count == 0) throw new InvalidDataException("动画列表中没有可读取的内嵌动作");
-            var livePairs = Re4AnimationLayerResolver.AppliesTo(path)
-                ? Re4AnimationLayerResolver.Resolve(_pak).ForList(path, motions) : [];
+            var motions = ViewportDataLoader.ListMotions(namesStream, path, _pak.ReadFile);
+            if (motions.Count == 0) throw new InvalidDataException("动画列表中没有可读取的动作，请检查配套基础列表是否已加载");
+            var live = Re4AnimationLayerResolver.AppliesTo(path) ? Re4AnimationLayerResolver.Resolve(_pak) : null;
+            motions = live?.PreviewMotions(path, motions) ?? motions;
+            var livePairs = live?.ForList(path, motions) ?? [];
             var selected = motions[Math.Clamp(index, 0, motions.Count - 1)];
             if (path.Contains("/_chainsaw/animation/", StringComparison.OrdinalIgnoreCase)
                 && path.EndsWith(".motlist.663", StringComparison.OrdinalIgnoreCase)
-                && AnimationLayerCatalog.IsAdditive(path, selected, livePairs))
-                selected = motions.FirstOrDefault(m => !AnimationLayerCatalog.IsAdditive(path, m, livePairs)) ?? selected;
-            using var motionStream = _pak.ReadFile(path);
-            var clip = ViewportDataLoader.LoadAnimation(motionStream, path,
-                selected.SourceIndex,
-                meshBoneNames, sceneMeshes);
+                && AnimationLayerCatalog.IsAdditive(path, selected, livePairs, live?.Usages))
+                selected = motions.FirstOrDefault(m => !AnimationLayerCatalog.IsAdditive(path, m, livePairs, live?.Usages)) ?? selected;
+            var clip = Re4AnimationResourceCatalog.LoadPreview(_pak, path, selected.SourceIndex, live, meshBoneNames, sceneMeshes);
             return (clip, motions);
         });
     }
@@ -2482,11 +2527,13 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void SetMotionListUi(string path, IReadOnlyList<MotionInfo> motions, int selectedIndex)
     {
         _currentMotlistPath = path;
-        _previewMotions = motions;
         // The costly resource parsing was warmed on the loading worker. A live
         // archive never falls back to the offline, single-list audit fixture.
         var liveConfiguration = _pak != null && Re4AnimationLayerResolver.AppliesTo(path)
             ? Re4AnimationLayerResolver.Resolve(_pak) : null;
+        _previewLayerConfiguration = liveConfiguration;
+        motions = liveConfiguration?.PreviewMotions(path, motions) ?? motions;
+        _previewMotions = motions;
         _previewLayerPairs = _pak == null ? null : liveConfiguration?.ForList(path, motions) ?? [];
         if (liveConfiguration != null)
             foreach (var diagnostic in liveConfiguration.Diagnostics) AppendLog("动画配对配置：" + diagnostic);
@@ -2512,6 +2559,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         ++_previewRequest;
         _currentMotlistPath = null;
         _previewLayerPairs = [];
+        _previewLayerConfiguration = null;
         _loadedMotionComboIndex = -1;
         _loadedMotionSource = -1;
         _currentMotionIndices = [];
@@ -2554,7 +2602,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         {
             using var meshMs = _pak!.ReadFile(meshPath);
             using var motMs = _pak.ReadFile(motlistPath);
-            new AnimationService().ConvertToGlbWithAnimation(meshMs, meshPath, motMs, motlistPath, glb, 0);
+            new AnimationService().ConvertToGlbWithAnimation(meshMs, meshPath, motMs, motlistPath, glb, 0, _pak.ReadFile);
             RunBlender("render_anim.py", glb, png, blenderPath, frame.ToString());
         }
         return png;
@@ -2729,7 +2777,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                         new AnimationService(_settings.UnityFbxAxes).ConvertAllToGlbWithAnimation(
                             merged.Mesh, motMs, motlistPath, workDir,
                             (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                                UpdateCountProgress(progress, current, total, "准备动作")));
+                                UpdateCountProgress(progress, current, total, "准备动作")), _pak.ReadFile);
                     }
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                         UpdateCountProgress(progress, 0,
@@ -2899,7 +2947,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private IReadOnlyList<MotionInfo> ReadMotions(string motlistPath)
     {
         using var stream = _pak!.ReadFile(motlistPath);
-        return ViewportDataLoader.ListMotions(stream, motlistPath);
+        return ViewportDataLoader.ListMotions(stream, motlistPath, _pak.ReadFile);
     }
 
     private static string NativeStem(string path, string marker)
@@ -2931,7 +2979,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private void WriteAnimationGuide(string output, string source)
     {
         using var stream = _pak!.ReadFile(source);
-        var motions = ViewportDataLoader.ListMotions(stream, source);
+        var motions = ViewportDataLoader.ListMotions(stream, source, _pak.ReadFile);
         var files = Directory.GetFiles(output, "*.fbx").Select(Path.GetFileName).ToArray();
         var text = AnimationPreviewMixer.ResourceGuide + "\n\n来源：" + source + "\n\n本次导出文件与源动作：\n";
         foreach (var motion in motions)
@@ -3386,9 +3434,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                     try
                     {
                         using var stream = _pak.ReadFile(paths[listIndex]);
-                        motionCounts[listIndex] = ViewportDataLoader.ListMotions(stream, paths[listIndex]).Count;
+                        motionCounts[listIndex] = ViewportDataLoader.ListMotions(stream, paths[listIndex], _pak.ReadFile).Count;
                         if (motionCounts[listIndex] == 0)
-                            failures.Add($"{paths[listIndex].Split('/')[^1]}：没有可导出的内嵌动画");
+                            failures.Add($"{paths[listIndex].Split('/')[^1]}：没有可导出的动画");
                     }
                     catch (Exception ex)
                     {
@@ -3398,7 +3446,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
                 var totalAnimations = motionCounts.Sum();
                 if (totalAnimations == 0)
-                    throw new InvalidOperationException("所选 MotionList 中没有可导出的内嵌动画");
+                    throw new InvalidOperationException("所选 MotionList 中没有可导出的动画");
 
                 const int exportFps = 60;
                 var totalWork = totalAnimations * 2;
@@ -3439,7 +3487,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                                         UpdateCountProgress(progress, overall, totalWork,
                                             $"准备列表 {listNumber}/{paths.Length} · {stem} {current}/{total}"));
-                                });
+                                }, _pak.ReadFile);
 
                             RunBlenderBatch("export_animations_fbx.py", blender, listWorkDir, finalDir,
                                 (current, total) =>
