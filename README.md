@@ -10,7 +10,13 @@ ReExtractor 是一个面向 Windows 的 RE Engine 资源工作台，用于加载
 
 > 请在 Releases 页面选择所需版本的 Windows x64 构建包，解压后运行唯一的 `ReExtractor-vX.Y.Z.exe`。首次启动会自动释放必要的贴图解码库，并在程序旁生成设置、日志、路径 list 和导出目录。
 
-当前版本：`v1.4.7`
+当前版本：`v1.4.8`
+
+## v1.4.8 更新
+
+- 修复单文件 EXE 在自动下载 RSZ 元数据前抛出异常，导致 SCN 预览提示“RSZ json file setting is not configured”的问题。
+- 首次使用仍需联网获取对应游戏的元数据；已有有效缓存可继续复用，无需手动配置 RSZ 路径。
+- 修复范围和验证边界详见 [版本说明](docs/RELEASE_NOTES_v1.4.8.md)。
 
 ## v1.4.7 更新
 
