@@ -38,8 +38,16 @@ static class PreviewAudit
             MotionListPath="natives/stm/_chainsaw/animation/ch/cha0/motlist/cha0_tram.motlist.663",BaseId=101,AdditiveId=130,PauseAtSeconds=.12});
         Pump((Task)Call("LoadPreviewSessionAsync",initialSession)!);
         using(var d=JsonDocument.Parse(File.ReadAllText(initialSession+".result.json")))Check(d.RootElement.GetProperty("Ready").GetBoolean(),d.RootElement.ToString());
-        var pak=(PakService)Field("_pak")!;var resolved=Re4AnimationLayerResolver.Resolve(pak);
-        ConfigurationGuards.Run(pak);
+        var pak=(PakService)Field("_pak")!;
+        var faultFolder=Environment.GetEnvironmentVariable("REEXTRACTOR_AUDIT_FAULT_FOLDER");
+        if(faultFolder!=null)
+        {
+            // Use a fresh service: the resolver intentionally caches each mounted resource set.
+            pak=Shared.Open();pak.AddFolder(faultFolder);
+            typeof(MainWindow).GetField("_pak",Flags)!.SetValue(main,pak);
+        }
+        else ConfigurationGuards.Run(pak);
+        var resolved=Re4AnimationLayerResolver.Resolve(pak);
         var view=main.FindControl<GlViewport>("Viewport")!;
         var combo=main.FindControl<ComboBox>("MotionCombo")!;var addCombo=main.FindControl<ComboBox>("AdditiveMotionCombo")!;
         var advanced=main.FindControl<Expander>("AdvancedMotionOptions")!;var rawToggle=main.FindControl<CheckBox>("ShowRawMotionTracks")!;
@@ -88,12 +96,19 @@ static class PreviewAudit
                 "GUI overlay load failed: "+main.FindControl<TextBlock>("ActionStatus")!.Text);
             view.PausePlayback();
         }
-        Check(resolved.Diagnostics.Count==0,string.Join("; ",resolved.Diagnostics));
+        if(faultFolder==null)Check(resolved.Diagnostics.Count==0,string.Join("; ",resolved.Diagnostics));
+        else Check(resolved.Diagnostics.Count>0&&resolved.Diagnostics.All(d=>d.Contains("cha0_wp9999_audit.motbank.3")),
+            "Expected only the injected bank diagnostics: "+string.Join("; ",resolved.Diagnostics));
         Check(resolved.Usages?.Count==66,"Expected 66 resource-scoped ordinary shoot usages");
         Check(resolved.Pairs.Count(p=>p.Composition==AnimationLayerComposition.PlayerShootEndpoint)==198,"Expected 22 weapon lists with nine fixed input combinations each");
         Check(resolved.Sources?.Count(s=>s.ListPath!=s.SourcePath)==33,"Expected 11 weapon lists inheriting three base inputs each");
         Shared.Save(root,"runtime-catalog",resolved);
-        var paths=resolved.Pairs.Select(p=>p.Path).Where(p=>!neutralOnly||p.EndsWith("cha0_wp4410h.motlist.663")).Distinct().Order().ToArray();
+        var targetedLists=Environment.GetEnvironmentVariable("REEXTRACTOR_AUDIT_LISTS")?.Split(';',StringSplitOptions.RemoveEmptyEntries);
+        var paths=resolved.Pairs.Select(p=>p.Path).Where(p=>!neutralOnly||p.EndsWith("cha0_wp4410h.motlist.663"))
+            .Where(p=>targetedLists==null||targetedLists.Contains(Path.GetFileName(p),StringComparer.OrdinalIgnoreCase)).Distinct().Order().ToArray();
+        Check(paths.Length>0,"No preview lists selected");
+        if(targetedLists!=null)Check(targetedLists.All(name=>paths.Any(p=>Path.GetFileName(p).Equals(name,StringComparison.OrdinalIgnoreCase))),
+            "A requested preview list has no confirmed pairs");
         using var pairWriter=new StreamWriter(Path.Combine(outRoot,"pairs.jsonl")){AutoFlush=true};
         using var rawWriter=new StreamWriter(Path.Combine(outRoot,"shoot-raw.jsonl")){AutoFlush=true};
         var exporter=new ViewportExportService();
@@ -188,7 +203,7 @@ static class PreviewAudit
         Check(pairFailures==0&&rawFailures==0,"Preview failures recorded; inspect pairs.jsonl/shoot-raw.jsonl");
         Shared.Save(outRoot,"missing-source-pairs",missingPairs);
         Shared.Save(outRoot,"summary",new {Scope="Loaded Leon body/head/hair; fixed input previews sampled across base/shot windows; neutral sources explicitly identified; not gameplay or exhaustive visual acceptance",
-            Paths=paths.Length,Definitions=resolved.Pairs.Count,PairsPassed=pairsDone,PairsFailed=pairFailures,PairsWithNoVisibleSampleDelta=zeroDelta,
+            FaultFolder=faultFolder,Paths=paths.Length,Definitions=resolved.Pairs.Count,PairsPassed=pairsDone,PairsFailed=pairFailures,PairsWithNoVisibleSampleDelta=zeroDelta,
             MissingOrExternalPairs=missing,RawShootsPassed=rawDone,RawShootsFailed=rawFailures});
         if(neutralOnly)ResultVerifier.Run(Path.GetDirectoryName(root)!,pak,resolved);
         main.Close();Console.WriteLine("PREVIEW_AUDIT_COMPLETE");

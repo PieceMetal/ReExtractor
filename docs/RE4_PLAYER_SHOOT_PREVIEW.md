@@ -31,6 +31,10 @@ wp4410H的500/501/502原始通道全部为零位移和单位旋转；它们没�
 组合开关不会产生姿态变化。界面会明确说明“零增量”，不能把加载成功当作射击表现通过。
 轨道的附加用途单独保存，即使基础姿态缺失，也不会把已确认的附加轨道当成完整动作。
 
+可选武器库和各个动作列表分别隔离读取异常。一个库的引用全部验证成功后才登记其
+资源上下文；损坏库、缺失引用或损坏列表会记录具体路径，不再中断其他武器的普通
+射击解析。公共玩家层、HOLD/SHOOT 动作树及骨骼遮罩的校验仍然保留。
+
 “当前动画”导出当前组合，作为普通动画播放；“全部动画”及批量导出保持本列表原始内嵌轨道，
 不自动烘焙射击组合，也不扩展继承内容。离线17组配对快照不添加未经当前资源核实的160组合。
 
@@ -39,7 +43,17 @@ wp4410H的500/501/502原始通道全部为零位移和单位旋转；它们没�
 ```text
 dotnet run --project tools/Re4ShootPreviewTests -c Release -- catalog <results> <game-directory> <list-file>
 dotnet run --project tools/Re4ShootPreviewTests -c Release -- preview <results> <game-directory> <list-file>
+dotnet run --project tools/Re4ShootIsolationTests -c Release -- <game-directory> <list-file> <results>
 ```
+
+针对反馈列表可设置环境变量 `REEXTRACTOR_AUDIT_LISTS` 为
+`cha0_wp4000h_ex.motlist.663;cha0_wp4100h.motlist.663`。若请求的列表未解析出组合，
+测试会失败，避免空集合通过。隔离测试覆盖损坏库、缺失引用、有效/无效混合引用、
+损坏列表以及登记上下文的原子性；故障样本在结果目录生成，不修改游戏 PAK。
+这些故障注入用于验证程序缺陷，不代表已经确认反馈者实际安装中的触发资源。
+将 `REEXTRACTOR_AUDIT_FAULT_FOLDER` 设为隔离测试输出下的 `malformed-bank` 目录，
+可重跑 preview：它会为 GUI 装入带故障样本的新资源集合，验证诊断仍存在且正常
+射击仍有 198 个组合，目标列表的用途筛选、配对选择和蒙皮导出仍通过。
 
 preview模式使用真实身体、头部、头发三个模型，检查配置和继承保护、界面组合选择、
 每帧关键值、覆盖持枪时窗和短射击段的原生蒙皮姿态、叠加开关/0%一致性和当前组合GLB读回。

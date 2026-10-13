@@ -141,31 +141,39 @@ public static class Re4PlayerShootAnimationResolver
                 foreach (var path in paths.Where(p => p.Contains("/_chainsaw/animation/ch/cha0/motbank/cha0_wp", StringComparison.OrdinalIgnoreCase)
                     && p.Contains(".motbank.", StringComparison.OrdinalIgnoreCase)))
                 {
-                    using var ws = pak.ReadFile(path);
-                    using var bank = new MotbankFile(new FileHandler(ws, path));
-                    if (!bank.Read()) throw new InvalidDataException("武器动作库读取失败：" + path);
-                    if (!string.IsNullOrEmpty(bank.JmapPath) && !resources.Resource(bank.JmapPath).Equals(jointMap, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException("武器使用了不同骨骼遮罩：" + path);
-                    foreach (var entry in bank.MotlistItems.Where(e => e.BankID == bankId))
+                    try
                     {
-                        var listPath = resources.Resource(entry.Path);
-                        if (Re4AnimationLayerResolver.AppliesTo(listPath))
-                            listContexts.TryAdd(listPath, $"{path}; Bank={entry.BankID}; Type={entry.BankType}; MaskBits={entry.BankTypeMaskBits}");
+                        using var ws = pak.ReadFile(path);
+                        using var bank = new MotbankFile(new FileHandler(ws, path));
+                        if (!bank.Read()) throw new InvalidDataException("武器动作库读取失败：" + path);
+                        if (!string.IsNullOrEmpty(bank.JmapPath) && !resources.Resource(bank.JmapPath).Equals(jointMap, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("武器使用了不同骨骼遮罩：" + path);
+                        // Publish a bank's contexts only after all its references validate.
+                        // A bad optional weapon must not suppress unrelated weapons.
+                        var bankContexts = new List<(string Path, string Context)>();
+                        foreach (var entry in bank.MotlistItems.Where(e => e.BankID == bankId))
+                        {
+                            var listPath = resources.Resource(entry.Path);
+                            if (Re4AnimationLayerResolver.AppliesTo(listPath))
+                                bankContexts.Add((listPath, $"{path}; Bank={entry.BankID}; Type={entry.BankType}; MaskBits={entry.BankTypeMaskBits}"));
+                        }
+                        foreach (var context in bankContexts) listContexts.TryAdd(context.Path, context.Context);
                     }
+                    catch (Exception e) { diagnostics.Add("普通射击武器库不可用：" + path + ": " + e.Message); }
                 }
                 foreach (var (path, bankContext) in listContexts)
                 {
-                    var metadata = resources.List(path);
-                    // Limit this adapter to weapon lists authoring their own
-                    // shoot variants. Other contexts need separate confirmation.
-                    var authoredShots = metadata.Motions.Where(m => shots.Any(s => s.Id == m.Id) && m.Embedded).ToArray();
-                    if (authoredShots.Length == 0) continue;
-                    var context = $"{holdTree.Path}#{holdTree.Id}:{holdTree.Tree.Name}; {shotTree.Path}#{shotTree.Id}:{shotTree.Tree.Name}; "
-                        + $"Layers={baseContext.Layer}→{addContext.Layer}; {bankContext}";
-                    foreach (var shot in authoredShots)
-                        usages.Add(new(path, shot.Id, shot.Name!, new(AnimationUsageKind.Additive, [context]), shot.IsNeutralDelta));
                     try
                     {
+                        var metadata = resources.List(path);
+                        // Limit this adapter to weapon lists authoring their own
+                        // shoot variants. Other contexts need separate confirmation.
+                        var authoredShots = metadata.Motions.Where(m => shots.Any(s => s.Id == m.Id) && m.Embedded).ToArray();
+                        if (authoredShots.Length == 0) continue;
+                        var context = $"{holdTree.Path}#{holdTree.Id}:{holdTree.Tree.Name}; {shotTree.Path}#{shotTree.Id}:{shotTree.Tree.Name}; "
+                            + $"Layers={baseContext.Layer}→{addContext.Layer}; {bankContext}";
+                        foreach (var shot in authoredShots)
+                            usages.Add(new(path, shot.Id, shot.Name!, new(AnimationUsageKind.Additive, [context]), shot.IsNeutralDelta));
                         if (authoredShots.Length != shots.Length || authoredShots.Any(s => s.HasScale || s.Flags != 0))
                             throw new InvalidDataException("射击变体缺少直接轨道或含不支持的缩放/标志");
                         var bases = holds.Motions.Select(h => resources.ResolveMotion(path, h.Id)).ToArray();
