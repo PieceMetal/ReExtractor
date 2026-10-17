@@ -87,6 +87,11 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         Action<int, int>? progress = null,
         Func<string, Stream?>? fileResolver = null)
     {
+        if (KunitsuLegacyLegAxes.IsDamageList(motlistPath) && meshPath.EndsWith(".mesh.240306278", StringComparison.OrdinalIgnoreCase))
+        {
+            var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
+            return ConvertAllToGlbWithAnimation(viewport, motlistStream, motlistPath, outputDirectory, progress, fileResolver);
+        }
         using var mesh = MeshService.LoadMesh(meshStream, meshPath);
         using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
         var motlist = resolved.List;
@@ -119,6 +124,17 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         string outputPath, int motionIndex = 0,
         Func<string, Stream?>? fileResolver = null)
     {
+        if (KunitsuLegacyLegAxes.IsDamageList(motlistPath) && meshPath.EndsWith(".mesh.240306278", StringComparison.OrdinalIgnoreCase))
+        {
+            var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
+            using var source = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+            var selected = source.List.Motions.ElementAtOrDefault(motionIndex)
+                ?? throw new ArgumentOutOfRangeException(nameof(motionIndex));
+            if (selected.MotFile is not MotFile legacyMotion) throw new NotSupportedException("动作没有可读取的 MOT 数据");
+            var clip = BuildClip(legacyMotion, selected.motNumber, viewport.Bones.Select(b=>b.Name).ToArray(), viewport, false, motlistPath);
+            new ViewportExportService(_unityAxes).ConvertToAnimatedGlb(viewport, viewport.Groups.Select(g=>g.Key).ToHashSet(), clip, outputPath);
+            return outputPath;
+        }
         using var mesh = MeshService.LoadMesh(meshStream, meshPath);
         using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
         var motlist = resolved.List;
@@ -286,7 +302,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                     tracks[target.Index] = track;
         }
 
-        return new AnimationClip
+        var result = new AnimationClip
         {
             Name = $"mot_{motionNumber}",
             Duration = duration,
@@ -294,6 +310,8 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             Tracks = tracks,
             NamedTracks = namedTracks,
         };
+        result = KunitsuLegacyLegAxes.Retarget(mot, motionNumber, motlistPath, result, meshBoneNames);
+        return skeletonMesh.JointConstraints?.Bake(skeletonMesh, result) ?? result;
     }
 
     private static uint TrackFrameRate(Track track) => track.frameRate > 0 ? track.frameRate : 60u;

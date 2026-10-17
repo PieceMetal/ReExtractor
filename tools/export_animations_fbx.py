@@ -7,6 +7,26 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fbx_export_profiles import prepare_export_axes, axis_options, export_target
 
 
+# Animation-only FBXs have no skin cluster carrying bind matrices. Blender's
+# exporter otherwise writes the current animated bone pose as default node
+# transforms, which the importer uses as the rest skeleton. Write rest defaults
+# only while serializing model nodes; animation baking keeps the evaluated pose.
+from io_scene_fbx import export_fbx_bin, fbx_utils
+_original_object_elements = export_fbx_bin.fbx_data_object_elements
+
+def _write_rest_object_elements(*args, **kwargs):
+    original_tx = fbx_utils.ObjectWrapper.fbx_object_tx
+    def rest_tx(self, scene_data, rest=False, rot_euler_compat=None):
+        return original_tx(self, scene_data, rest=rest or self.is_bone,
+                           rot_euler_compat=rot_euler_compat)
+    fbx_utils.ObjectWrapper.fbx_object_tx = rest_tx
+    try:
+        return _original_object_elements(*args, **kwargs)
+    finally:
+        fbx_utils.ObjectWrapper.fbx_object_tx = original_tx
+
+export_fbx_bin.fbx_data_object_elements = _write_rest_object_elements
+
 def arguments():
     values = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if len(values) not in {2, 3}:

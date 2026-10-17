@@ -916,6 +916,7 @@ public sealed class GlViewport : OpenGlControlBase
 
         // centered on the asset just like Zoom Extents Selected in a DCC viewport.
 
+        RecalculateVisibleBounds();
         _target = (_boundsMin + _boundsMax) * 0.5f;
 
         FitCamera();

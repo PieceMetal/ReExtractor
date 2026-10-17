@@ -2281,13 +2281,13 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         && _previewMotions.All(m => AnimationLayerCatalog.IsAdditive(_currentMotlistPath!, m, _previewLayerPairs, _previewLayerConfiguration?.Usages));
     private MotionInfo? SelectedBaseMotion => (uint)MotionCombo.SelectedIndex < (uint)_visiblePreviewMotions.Count
         ? _visiblePreviewMotions[MotionCombo.SelectedIndex] : null;
-    private MotionInfo? SelectedAdditiveMotion => AdditiveMotionCombo.SelectedIndex > 0
+    private MotionInfo? SelectedAdditiveMotion => IsRe4Preview && AdditiveMotionCombo.SelectedIndex > 0
         && AdditiveMotionCombo.SelectedIndex <= _relatedPreviewMotions.Count
         ? _relatedPreviewMotions[AdditiveMotionCombo.SelectedIndex - 1] : null;
-    private bool UseVerifiedReloadMask => _currentMotlistPath is { } path
+    private bool UseVerifiedReloadMask => IsRe4Preview && _currentMotlistPath is { } path
         && SelectedBaseMotion is { } basis && SelectedAdditiveMotion is { } overlay
         && AnimationLayerCatalog.UsesReloadMask(path, basis.MotionNumber, overlay.MotionNumber, _previewLayerPairs);
-    private AnimationLayerProfile? SelectedLayerProfile => ShowRawMotionTracks.IsChecked != true
+    private AnimationLayerProfile? SelectedLayerProfile => IsRe4Preview && ShowRawMotionTracks.IsChecked != true
         && _currentMotlistPath is { } path && SelectedBaseMotion is { } basis
         ? AnimationLayerCatalog.GetProfile(path, basis.MotionNumber, SelectedAdditiveMotion?.MotionNumber, _previewLayerPairs) : null;
     private bool IsConfirmedLayerPair => SelectedAdditiveMotion is { } selected
@@ -2308,6 +2308,16 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void ResetAdditiveChoices()
     {
+        if (!IsRe4Preview)
+        {
+            _layerCandidates = [];
+            _relatedPreviewMotions = [];
+            AdditiveMotionCombo.ItemsSource = null;
+            AdditiveMotionCombo.SelectedIndex = -1;
+            AdditiveMotionCombo.IsEnabled = false;
+            RawAdditiveInventory.Text = "";
+            return;
+        }
         AdditiveMotionCombo.IsEnabled = ShowRawMotionTracks.IsChecked != true;
         _layerCandidates = IsRe4Preview && ShowRawMotionTracks.IsChecked != true && SelectedBaseMotion is { } basis
             ? AnimationLayerCatalog.Find(_currentMotlistPath!, basis, _previewMotions, _previewLayerPairs, _previewLayerConfiguration?.Usages)
@@ -2329,6 +2339,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
     private void UpdateBlendPreviewDescription()
     {
+        if (!IsRe4Preview)
+        {
+            BlendPreviewDescription.Text = "";
+            return;
+        }
         var combined = SelectedAdditiveMotion != null;
         if (SelectedLayerProfile?.Composition == AnimationLayerComposition.PlayerShootEndpoint)
         {
@@ -2492,6 +2507,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             RememberLoadedMotionUi();
             ShowTimeline(clip.Duration);
             ActionStatus.Text = $"动画播放中: {clip.Name}（时长 {clip.Duration:F1}s）";
+            if (clip.PoseAdaptation is { Length: > 0 } adaptation)
+                ActionStatus.Text += "；" + adaptation;
         }
         catch (Exception ex)
         {
@@ -2547,7 +2564,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var preferred = (uint)selectedIndex < (uint)motions.Count ? motions[selectedIndex].SourceIndex : -1;
         PopulatePreviewMotionChoices(preferred);
         RememberLoadedMotionUi();
-        BlendPreviewPanel.IsVisible = motions.Count > 0;
+        BlendPreviewPanel.IsVisible = IsRe4Preview && motions.Count > 0;
         UpdateBlendPreviewDescription();
         MotionCombo.IsVisible = motions.Count > 0;
         MotionLabel.IsVisible = motions.Count > 0;

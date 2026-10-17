@@ -36,6 +36,7 @@ public sealed class ViewportMesh
     public int FaceCount => Faces.Length;
     /// <summary>viscon group filter summary, e.g. "viscon 7/11（隐藏 9,10,131,250）".</summary>
     public string VisconInfo = "";
+    public KunitsuJointConstraints? JointConstraints;
 
     /// <summary>Bake a rigid scene-node transform into a mesh instance.</summary>
     public ViewportMesh WithTransform(Matrix4x4 transform)
@@ -58,6 +59,7 @@ public sealed class ViewportMesh
             Bones = Bones,
             DeformToBone = DeformToBone,
             VisconInfo = VisconInfo,
+            JointConstraints = JointConstraints,
         };
     }
 
@@ -321,6 +323,7 @@ public sealed class ViewportMesh
             Bones = bones.ToArray(),
             DeformToBone = deformToBone.ToArray(),
             VisconInfo = $"merged {meshes.Count} meshes",
+            JointConstraints = KunitsuJointConstraints.Combine(meshes),
         };
     }
 
@@ -560,6 +563,7 @@ public sealed class ViewportBone
 /// <summary>One parsed motion: per-bone keyframe tracks.</summary>
 public sealed class AnimationClip
 {
+    public string? PoseAdaptation;
     public required string Name;
     public required float Duration;
     public required int FrameRate;
@@ -820,6 +824,7 @@ public static class ViewportDataLoader
             Bones = bones,
             DeformToBone = deformToBone,
             VisconInfo = visconInfo,
+            JointConstraints = KunitsuJointConstraints.Load(nativePath, openResource),
         };
     }
 
@@ -1424,7 +1429,7 @@ public static class ViewportDataLoader
     }
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
     private static readonly string[] TexVersionCandidates =
-        [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];
+        [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".231106777", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];
 
     /// <summary>
     /// mdf texPath is relative ("Art/Model/.../x_ALBD.tex") and lacks natives prefix + version suffix.
@@ -1797,7 +1802,7 @@ public static class ViewportDataLoader
         int motionIndex = 0,
         IReadOnlyList<string>? meshBoneNames = null,
         IReadOnlyList<ViewportMesh>? sceneMeshes = null,
-        Func<string, Stream?>? fileResolver = null)
+        Func<string, Stream?>? fileResolver = null, bool applyGameRetargeting = true)
     {
         using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
         var motlist = resolved.List;
@@ -1819,9 +1824,21 @@ public static class ViewportDataLoader
         // animation bones.
         if (sceneMeshes is { Count: > 0 })
         {
+            IReadOnlyList<MotBone> requiredBones = mot.Bones;
+            if ((int)mot.Header.version == 799 && KunitsuLegacyLegAxes.IsDamageList(motlistPath))
+            {
+                // This list shares a 190-bone header containing legacy,
+                // unanimated helpers. They must not inflate the model's FBX
+                // skeleton; retain animated joints and their required parents.
+                var hashes = mot.BoneClips.Select(c => c.ClipHeader.boneHash).ToHashSet();
+                var required = new HashSet<MotBone>();
+                foreach (var bone in mot.Bones.Where(b => hashes.Contains(b.boneHash)))
+                    for (MotBone? ancestor = bone; ancestor != null && required.Add(ancestor); ancestor = ancestor.Parent) { }
+                requiredBones = mot.Bones.Where(required.Contains).ToArray();
+            }
             foreach (var sceneMesh in sceneMeshes)
             {
-                AddAnimationBones(sceneMesh, mot.Bones);
+                AddAnimationBones(sceneMesh, requiredBones);
             }
 
             meshBoneNames = sceneMeshes
@@ -1920,12 +1937,15 @@ public static class ViewportDataLoader
                     if (hashToBone.TryGetValue(MurMur3HashUtils.GetHash(name), out var target))
                         tracks[target.Index] = track;
         }
-        return new AnimationClip
+        var result = new AnimationClip
         {
             Name = $"mot_{motion.motNumber}", Duration = duration,
             FrameRate = sourceFrameRate, FrameCount = sourceFrameCount,
             Tracks = tracks, NamedTracks = namedTracks,
         };
+        if (applyGameRetargeting)
+            result = KunitsuLegacyLegAxes.Retarget(mot, motion.motNumber, motlistPath, result, meshBoneNames);
+        return poseDriver?.JointConstraints?.Bake(poseDriver, result) ?? result;
     }
 
     /// <summary>
