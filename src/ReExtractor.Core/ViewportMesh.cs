@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using ReeLib;
 using ReeLib.Common;
 using ReeLib.Mdf;
@@ -541,6 +541,9 @@ public sealed class ViewportGroup
 /// <summary>Decoded RGBA texture for software sampling (top-left origin, row-major).</summary>
 public sealed class ViewportTexture
 {
+    // Optional linear PBR channels carried through GLB and the FBX bridge.
+    public ViewportTexture? NormalMap;
+    public ViewportTexture? MetallicRoughnessMap;
     public required int Width;
     public required int Height;
     public required uint[] Pixels; // BGRA, same layout as framebuffer (mip level 0)
@@ -1043,12 +1046,41 @@ public static class ViewportDataLoader
                 }
                 // Decode and material customization may each alter the pixels. Build the
                 // GPU mip chain once from the final result, not after every sub-step.
+                if (meshPath.EndsWith(".mesh.260421070", StringComparison.OrdinalIgnoreCase))
+                    LoadDd2SurfaceMaps(texture, mat, openResource, meshPath);
                 BuildMipChain(texture);
                 result[meshMatIndex] = new PreviewMaterial(texture, alphaCutout);
             }
             catch { /* skip undecodable textures */ }
         }
         return result;
+    }
+
+    private static void LoadDd2SurfaceMaps(ViewportTexture albedo, MaterialData material,
+        Func<string, Stream?> open, string meshPath)
+    {
+        var header = material.Textures.FirstOrDefault(t =>
+            t.texType.Equals("NormalRoughnessMap", StringComparison.OrdinalIgnoreCase) && !IsNullTexture(t.texPath));
+        if (header == null) return;
+        using var stream = OpenNormalized(open, header.texPath, meshPath);
+        if (stream == null) return;
+        var packed = DecodeTexture(stream, header.texPath, packedChannels: true);
+        var normal = CloneTexture(packed, material.Name + "_Normal");
+        ForceOpaqueAlpha(normal);
+        var surface = CloneTexture(packed, material.Name + "_MetallicRoughness");
+        var dielectric = material.Textures.Any(t => t.texType.Equals("BaseDielectricMap", StringComparison.OrdinalIgnoreCase));
+        for (var y = 0; y < packed.Height; y++)
+        for (var x = 0; x < packed.Width; x++)
+        {
+            var index = y * packed.Width + x;
+            var roughness = packed.Pixels[index] >> 24;
+            var color = albedo.Pixels[(y * albedo.Height / packed.Height) * albedo.Width + x * albedo.Width / packed.Width];
+            var metallic = dielectric ? 255u - (color >> 24) : 0u;
+            // glTF: roughness in G, metallic in B. NRMR stores normal RGB / roughness A.
+            surface.Pixels[index] = 0xFFFF0000u | (roughness << 8) | metallic;
+        }
+        albedo.NormalMap = normal;
+        albedo.MetallicRoughnessMap = surface;
     }
 
 
@@ -1429,7 +1461,7 @@ public static class ViewportDataLoader
     }
     /// <summary>Known .tex version suffixes, most recent RE games first (OWOTS/Pragmata era).</summary>
     private static readonly string[] TexVersionCandidates =
-        [".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".231106777", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];
+        [".251211553", ".251111100", ".241106027", ".241101895", ".250813143", ".240701001", ".240606151", ".231106777", ".760230703", ".143230113", ".143221013", ".35", ".34", ".30", ".28", ".190820018", ".11", ".10"];
 
     /// <summary>
     /// mdf texPath is relative ("Art/Model/.../x_ALBD.tex") and lacks natives prefix + version suffix.

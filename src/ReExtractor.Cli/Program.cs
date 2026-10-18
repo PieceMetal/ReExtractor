@@ -679,9 +679,13 @@ switch (command)
         var nativePath = positional.ElementAtOrDefault(1);
         var outDir = GetOpt("--out") ?? "output";
         if (nativePath == null) { Console.WriteLine("preview2glb requires a mesh path"); return 1; }
+        // Build hash routes once before MDF/TEX candidate probing; missing paths
+        // must not decrypt the entire archive table for every suffix candidate.
+        pak.EnumerateFiles();
         using var ms = pak.ReadFile(nativePath);
         var vm = ViewportDataLoader.LoadMesh(ms, nativePath, 1,
-            path => { try { return pak.ReadFile(path); } catch { return null; } });
+            path => { try { return pak.ReadFile(path); } catch { return null; } },
+            materialResolver: pak.CreateMaterialResolver());
         var visible = vm.Groups.Where(group => group.DefaultVisible).Select(group => group.Key).ToHashSet();
         var output = Path.Combine(outDir, Path.GetFileNameWithoutExtension(nativePath) + ".preview.glb");
         new ViewportExportService().ConvertToGlb(vm, visible, output);

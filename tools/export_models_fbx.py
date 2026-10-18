@@ -2,9 +2,58 @@ import bpy
 import os
 import re
 import sys
+from array import array
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fbx_export_profiles import prepare_export_axes, axis_options
+
+
+def unpack_pbr_channels_for_fbx():
+    # FBX's material wrapper cannot follow glTF's Separate Color node. Give
+    # roughness/metallic direct image links so both survive FBX re-import.
+    cache = {}
+    for material in bpy.data.materials:
+        if not material.use_nodes:
+            continue
+        tree = material.node_tree
+        for bsdf in [n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"]:
+            for socket_name in ("Roughness", "Metallic"):
+                socket = bsdf.inputs.get(socket_name)
+                if not socket or not socket.is_linked:
+                    continue
+                link = socket.links[0]
+                separate = link.from_node
+                if separate.type not in {"SEPARATE_COLOR", "SEPRGB"}:
+                    continue
+                source_input = separate.inputs[0]
+                if not source_input.is_linked:
+                    continue
+                source = source_input.links[0].from_node
+                if source.type != "TEX_IMAGE" or not source.image:
+                    continue
+                channel = {"Red": 0, "Green": 1, "Blue": 2, "R": 0, "G": 1, "B": 2}.get(link.from_socket.name)
+                if channel is None:
+                    continue
+                key = (source.image.as_pointer(), channel)
+                image = cache.get(key)
+                if image is None:
+                    width, height = source.image.size
+                    data = array('f', [0.0]) * (width * height * 4)
+                    source.image.pixels.foreach_get(data)
+                    values = array('f', [0.0]) * len(data)
+                    for i in range(width * height):
+                        value = data[i * 4 + channel]
+                        values[i * 4:i * 4 + 4] = array('f', [value, value, value, 1.0])
+                    image = bpy.data.images.new(source.image.name + "_" + socket_name, width, height)
+                    image.colorspace_settings.name = "Non-Color"
+                    image.pixels.foreach_set(values)
+                    image.pack()
+                    cache[key] = image
+                node = tree.nodes.new("ShaderNodeTexImage")
+                node.image = image
+                if source.inputs['Vector'].is_linked:
+                    tree.links.new(source.inputs['Vector'].links[0].from_socket, node.inputs['Vector'])
+                tree.links.new(node.outputs['Color'], socket)
 
 
 def arguments():
@@ -40,6 +89,7 @@ def safe_texture_name(name, used):
 
 
 def save_external_textures(output_path):
+    output_path = os.path.abspath(output_path)
     texture_dir = os.path.splitext(output_path)[0] + ".fbm"
     os.makedirs(texture_dir, exist_ok=True)
     used = set()
@@ -70,6 +120,8 @@ def save_external_textures(output_path):
 
 
 def verify_saved_texture(path):
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        raise RuntimeError(f"texture file was not written: {path}")
     loaded = bpy.data.images.load(path, check_existing=False)
     try:
         if loaded.size[0] <= 0 or loaded.size[1] <= 0:
@@ -141,6 +193,8 @@ def ensure_export_root(armature):
 
 
 source_dir, output_path = arguments()
+source_dir = os.path.abspath(source_dir)
+output_path = os.path.abspath(output_path)
 inputs = sorted(
     os.path.join(source_dir, name)
     for name in os.listdir(source_dir)
@@ -235,6 +289,7 @@ if mesh_objects:
     bpy.context.view_layer.objects.active = merged_mesh
 
 prepare_export_axes()
+unpack_pbr_channels_for_fbx()
 save_external_textures(output_path)
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 bpy.ops.export_scene.fbx(

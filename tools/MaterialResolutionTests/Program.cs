@@ -16,6 +16,21 @@ byte[] Material(string texture, string name = "body")
 }
 
 var count = 0;
+// New DD2 references omit the numeric TEX suffix, like older game references.
+{
+    var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+    {
+        [stem + ".mdf2.50"] = Material("test/body.tex"),
+        ["natives/stm/streaming/test/body.tex.251211553"] = [1],
+        ["natives/stm/streaming/test/normal.tex.251211553"] = [1],
+    };
+    Stream? Open(string path) => files.TryGetValue(path, out var data) ? new MemoryStream(data) : null;
+    var dd2Resolution = new MaterialResolver(files.Keys).Resolve(stem + ".mesh.260421070", ["body"], Open);
+    var refs = ViewportDataLoader.ListReferencedTexturePaths(dd2Resolution, Open);
+    if (refs.Count != 2 || refs.Any(p => !p.EndsWith(".251211553") || !p.Contains("/streaming/")))
+        throw new Exception("New DD2 full-resolution texture references were not resolved");
+    Console.WriteLine("PASS DD2 251211553 albedo/normal streaming references");
+}
 foreach (var suffix in new[] { "", "_v00", "_event_00", "_c", "_c_event_00", "_d_event_00" })
 {
     var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)

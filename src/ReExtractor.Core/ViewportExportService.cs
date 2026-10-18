@@ -300,6 +300,10 @@ public sealed class ViewportExportService
             var texture = mesh.Textures[slot];
             var material = new MaterialBuilder(texture.Name).WithMetallicRoughnessShader().WithDoubleSide(true);
             material.WithChannelImage(KnownChannel.BaseColor, ImageBuilder.From(ToPng(texture), texture.Name));
+            if (texture.NormalMap is { } normal)
+                material.WithNormal(ImageBuilder.From(ToPng(normal), normal.Name));
+            if (texture.MetallicRoughnessMap is { } surface)
+                material.WithMetallicRoughness(ImageBuilder.From(ToPng(surface), surface.Name), 1f, 1f);
             var alphaCutout = Enumerable.Range(0, Math.Min(mesh.Faces.Length, mesh.FaceTexture.Length))
                 .Any(face => mesh.FaceTexture[face] == slot &&
                     face < mesh.FaceAlphaCutout.Length && mesh.FaceAlphaCutout[face]);
