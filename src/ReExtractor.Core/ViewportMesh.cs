@@ -1868,6 +1868,8 @@ public static class ViewportDataLoader
                     for (MotBone? ancestor = bone; ancestor != null && required.Add(ancestor); ancestor = ancestor.Parent) { }
                 requiredBones = mot.Bones.Where(required.Contains).ToArray();
             }
+            if (mot.Header.version == MotVersion.MHR)
+                RestoreMhrAnimationParents(sceneMeshes, mot.Bones);
             foreach (var sceneMesh in sceneMeshes)
             {
                 AddAnimationBones(sceneMesh, requiredBones);
@@ -2611,6 +2613,88 @@ public static class ViewportDataLoader
                boneName.Equals("R_masseter_muscle", StringComparison.OrdinalIgnoreCase);
         return isMultiEyeBone && mot.Bones.Any(bone =>
             bone.boneName.Equals("Front_Eye", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Rise equipment stores collapsed hierarchies (for example Root -> Spine_01).
+    /// MOT rotations are relative to the full hierarchy, so merely appending Cog,
+    /// Waist_00 and Spine_00 leaves the weighted bones outside their animation chain.
+    /// Restore only omitted ancestor paths, retaining every source inverse bind.
+    /// </summary>
+    private static void RestoreMhrAnimationParents(IReadOnlyList<ViewportMesh> meshes, IReadOnlyList<MotBone> motionBones)
+    {
+        var motionByName = motionBones.Where(b => !string.IsNullOrWhiteSpace(b.boneName))
+            .GroupBy(b => b.boneName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        // Snapshot before any part is extended. A complete mesh parent relationship
+        // supplies a rest transform; MOT quaternions may already contain a posed frame.
+        var sourceLocals = new Dictionary<string, Matrix4x4>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mesh in meshes)
+            foreach (var bone in mesh.Bones)
+                if (!bone.IsMotionHelper && motionByName.TryGetValue(bone.Name, out var motion) &&
+                    bone.ParentIndex >= 0 && bone.ParentIndex < mesh.Bones.Length &&
+                    string.Equals(mesh.Bones[bone.ParentIndex].Name, motion.Parent?.boneName, StringComparison.OrdinalIgnoreCase))
+                    sourceLocals.TryAdd(bone.Name, bone.LocalBind);
+
+        foreach (var mesh in meshes)
+        {
+            var original = mesh.Bones;
+            var originalNames = original.Select(b => b.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var reconnect = new List<(int Index, MotBone Motion)>();
+            for (var i = 0; i < original.Length; i++)
+            {
+                var bone = original[i];
+                if (bone.IsMotionHelper || !motionByName.TryGetValue(bone.Name, out var motion) || motion.Parent == null)
+                    continue;
+                var parentName = bone.ParentIndex >= 0 ? original[bone.ParentIndex].Name : null;
+                if (string.Equals(parentName, motion.Parent.boneName, StringComparison.OrdinalIgnoreCase)) continue;
+                // A different authored rig is not a truncated one. Reconnect only
+                // when the MOT path rejoins the source parent through missing bones.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { bone.Name };
+                var ancestor = motion.Parent;
+                var omitted = false;
+                while (ancestor != null && seen.Add(ancestor.boneName) &&
+                    !string.Equals(ancestor.boneName, parentName, StringComparison.OrdinalIgnoreCase))
+                {
+                    omitted |= !originalNames.Contains(ancestor.boneName);
+                    ancestor = ancestor.Parent;
+                }
+                if (omitted && (ancestor != null && string.Equals(ancestor.boneName, parentName, StringComparison.OrdinalIgnoreCase) ||
+                                ancestor == null && parentName == null))
+                    reconnect.Add((i, motion));
+            }
+            if (reconnect.Count == 0) continue;
+            AddAnimationBones(mesh, motionBones);
+            var byName = mesh.Bones.Select((b, i) => (b.Name, i)).GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().i, StringComparer.OrdinalIgnoreCase);
+            foreach (var (index, motion) in reconnect)
+            {
+                var bone = original[index];
+                var local = sourceLocals.TryGetValue(bone.Name, out var authored) ? authored : bone.LocalBind;
+                // A standalone part has no complete mesh peer. The MOT table still
+                // supplies the uncollapsed local offset; retain the mesh rest rotation.
+                if (!sourceLocals.ContainsKey(bone.Name)) local.Translation = motion.translation;
+                mesh.Bones[index] = new ViewportBone { Name = bone.Name, ParentIndex = byName[motion.Parent!.boneName],
+                    LocalBind = local, InverseGlobalBind = bone.InverseGlobalBind };
+            }
+            foreach (var bone in mesh.Bones.Where(b => b.IsMotionHelper))
+                if (sourceLocals.TryGetValue(bone.Name, out var local)) bone.LocalBind = local;
+            // Reparenting changes synthesized helpers' global rest matrices. Their
+            // inverses must agree for the GLB/FBX bridge; source skin binds stay intact.
+            var globals = new Matrix4x4[mesh.Bones.Length];
+            var resolved = new bool[mesh.Bones.Length];
+            Matrix4x4 Global(int index)
+            {
+                if (resolved[index]) return globals[index];
+                var bone = mesh.Bones[index];
+                globals[index] = bone.ParentIndex >= 0 ? bone.LocalBind * Global(bone.ParentIndex) : bone.LocalBind;
+                resolved[index] = true;
+                return globals[index];
+            }
+            for (var i = 0; i < mesh.Bones.Length; i++)
+                if (mesh.Bones[i].IsMotionHelper && Matrix4x4.Invert(Global(i), out var inverse))
+                    mesh.Bones[i].InverseGlobalBind = inverse;
+        }
     }
 
     private static void AddAnimationBones(ViewportMesh mesh, IReadOnlyList<MotBone> motionBones)
