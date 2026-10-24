@@ -1781,10 +1781,12 @@ public static class ViewportDataLoader
         var fileName = Path.GetFileName(motlistPath);
         var cut = fileName.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
         var baseName = cut > 0 ? fileName[..cut] : fileName;
+        var dmcPlans = Dmc5NeroMotionComposition.Plans(motlist, motlistPath);
         return motlist.Motions.Select((motion, index) => (motion, index))
-            .Where(item => item.motion.MotFile is MotFile)
+            .Where(item => item.motion.MotFile is MotFile || dmcPlans.Any(p => p.TreeIndex == item.index))
             .Select(item => new MotionInfo(item.index,
-                $"{item.motion.MotFile!.Name}（编号 {item.motion.motNumber}）",
+                $"{item.motion.MotFile!.Name}（编号 {item.motion.motNumber}）"
+                    + (dmcPlans.Any(p => p.TreeIndex == item.index || p.LowerIndex == item.index) ? " · 正前方组合" : ""),
                 item.motion.motNumber))
             .ToList();
     }
@@ -1834,12 +1836,15 @@ public static class ViewportDataLoader
         int motionIndex = 0,
         IReadOnlyList<string>? meshBoneNames = null,
         IReadOnlyList<ViewportMesh>? sceneMeshes = null,
-        Func<string, Stream?>? fileResolver = null, bool applyGameRetargeting = true)
+        Func<string, Stream?>? fileResolver = null, bool applyGameRetargeting = true,
+        bool composeDmc5Motions = true)
     {
         using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
         var motlist = resolved.List;
         var motion = motlist.Motions.ElementAtOrDefault(motionIndex)
             ?? throw new InvalidDataException($"Motion index {motionIndex} out of range");
+        if (composeDmc5Motions && Dmc5NeroMotionComposition.Resolve(motlist, motlistPath, motionIndex) is { } dmcPlan)
+            return Dmc5NeroMotionComposition.Load(motlist, motlistPath, dmcPlan, meshBoneNames, sceneMeshes, fileResolver);
         if (motion.MotFile is not MotFile mot)
             throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据（基础列表未提供对应动作，或该槽位为动作树/外部动作链接）：{motlistPath}");
         var usesReferencePoseTracks = (int)mot.Header.version == 892;

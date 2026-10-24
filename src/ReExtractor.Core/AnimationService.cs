@@ -28,7 +28,7 @@ public sealed class AnimationService
         if (motionIndex < 0 || motionIndex >= motlist.Motions.Count)
             throw new ArgumentOutOfRangeException(nameof(motionIndex), $"Motion index {motionIndex} out of range ({motlist.Motions.Count} motions)");
         var motion = motlist.Motions[motionIndex];
-        if (motion.MotFile is not MotFile mot)
+        if (motion.MotFile is not MotFile && Dmc5NeroMotionComposition.Resolve(motlist, motlistPath, motionIndex) == null)
             throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据：{motlistPath}");
 
         Directory.CreateDirectory(outputDirectory);
@@ -39,8 +39,7 @@ public sealed class AnimationService
         var outputPath = Path.Combine(outputDirectory,
             $"001_{SafeName(stem)}_motion{motionIndex:D3}_id{motion.motNumber}.glb");
         var boneNames = skeletonMesh.Bones.Select(bone => bone.Name).ToArray();
-        var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
-            (int)mot.Header.version == 892, motlistPath);
+        var clip = BuildExportClip(motlist, motionIndex, boneNames, skeletonMesh, motlistPath, fileResolver);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
         new ViewportExportService(_unityAxes).ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
         progress?.Invoke(1, 1);
@@ -61,18 +60,19 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         if (marker > 0) stem = stem[..marker];
 
         var outputs = new List<string>();
-        var exportableCount = motlist.Motions.Count(motion => motion.MotFile is MotFile);
+        var dmcPlans = Dmc5NeroMotionComposition.Plans(motlist, motlistPath);
+        var exportableCount = motlist.Motions.Select((m, i) => (m, i))
+            .Count(x => x.m.MotFile is MotFile || dmcPlans.Any(p => p.TreeIndex == x.i));
         var boneNames = skeletonMesh.Bones.Select(bone => bone.Name).ToArray();
         var exporter = new ViewportExportService(_unityAxes);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
         for (var index = 0; index < motlist.Motions.Count; index++)
         {
             var motion = motlist.Motions[index];
-            if (motion.MotFile is not MotFile mot) continue;
+            if (motion.MotFile is not MotFile && !dmcPlans.Any(p => p.TreeIndex == index)) continue;
             var outputPath = Path.Combine(outputDirectory,
                 $"{outputs.Count + 1:D3}_{SafeName(stem)}_motion{index:D3}_id{motion.motNumber}.glb");
-            var clip = BuildClip(mot, motion.motNumber, boneNames, skeletonMesh,
-                (int)mot.Header.version == 892, motlistPath);
+            var clip = BuildExportClip(motlist, index, boneNames, skeletonMesh, motlistPath, fileResolver);
             exporter.ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
             outputs.Add(outputPath);
             progress?.Invoke(outputs.Count, exportableCount);
@@ -87,7 +87,8 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         Action<int, int>? progress = null,
         Func<string, Stream?>? fileResolver = null)
     {
-        if (KunitsuLegacyLegAxes.IsDamageList(motlistPath) && meshPath.EndsWith(".mesh.240306278", StringComparison.OrdinalIgnoreCase))
+        if (Dmc5NeroMotionComposition.AppliesTo(motlistPath)
+            || (KunitsuLegacyLegAxes.IsDamageList(motlistPath) && meshPath.EndsWith(".mesh.240306278", StringComparison.OrdinalIgnoreCase)))
         {
             var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
             return ConvertAllToGlbWithAnimation(viewport, motlistStream, motlistPath, outputDirectory, progress, fileResolver);
@@ -124,6 +125,14 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         string outputPath, int motionIndex = 0,
         Func<string, Stream?>? fileResolver = null)
     {
+        if (Dmc5NeroMotionComposition.AppliesTo(motlistPath))
+        {
+            var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
+            using var resolvedDmc = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
+            var clip = BuildExportClip(resolvedDmc.List, motionIndex, viewport.Bones.Select(b => b.Name).ToArray(),
+                viewport, motlistPath, fileResolver);
+            return new ViewportExportService(_unityAxes).ConvertToAnimatedGlb(viewport, viewport.Groups.Select(g => g.Key).ToHashSet(), clip, outputPath);
+        }
         if (KunitsuLegacyLegAxes.IsDamageList(motlistPath) && meshPath.EndsWith(".mesh.240306278", StringComparison.OrdinalIgnoreCase))
         {
             var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
@@ -214,6 +223,17 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
     {
         foreach (var c in Path.GetInvalidFileNameChars()) value = value.Replace(c, '_');
         return value.Length > 80 ? value[..80] : value;
+    }
+
+    private static AnimationClip BuildExportClip(MotlistFile list, int index, IReadOnlyList<string> boneNames,
+        ViewportMesh mesh, string path, Func<string, Stream?>? resolver)
+    {
+        if (Dmc5NeroMotionComposition.Resolve(list, path, index) is { } plan)
+            return Dmc5NeroMotionComposition.Load(list, path, plan, boneNames, [mesh], resolver);
+        var motion = list.Motions.ElementAtOrDefault(index)
+            ?? throw new ArgumentOutOfRangeException(nameof(index));
+        if (motion.MotFile is not MotFile mot) throw new NotSupportedException("动作没有可读取的 MOT 数据。");
+        return BuildClip(mot, motion.motNumber, boneNames, mesh, (int)mot.Header.version == 892, path);
     }
 
     private static AnimationClip BuildClip(
