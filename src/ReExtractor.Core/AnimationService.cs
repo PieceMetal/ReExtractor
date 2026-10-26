@@ -28,10 +28,10 @@ public sealed class AnimationService
         if (motionIndex < 0 || motionIndex >= motlist.Motions.Count)
             throw new ArgumentOutOfRangeException(nameof(motionIndex), $"Motion index {motionIndex} out of range ({motlist.Motions.Count} motions)");
         var motion = motlist.Motions[motionIndex];
-        if (motion.MotFile is not MotFile && Dmc5NeroMotionComposition.Resolve(motlist, motlistPath, motionIndex) == null)
+        if (motion.MotFile is not MotFile && Dmc5NeroMotionComposition.Resolve(motlist, motlistPath, motionIndex) == null
+            && !(motlist.Header.version == ReeLib.Motlist.MotlistVersion.MHR && motion.MotFile is MotTreeFile))
             throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据：{motlistPath}");
 
-        Directory.CreateDirectory(outputDirectory);
         var stem = Path.GetFileName(motlistPath);
         var marker = stem.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
         if (marker > 0) stem = stem[..marker];
@@ -54,22 +54,27 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
     {
         using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
         var motlist = resolved.List;
-        Directory.CreateDirectory(outputDirectory);
         var stem = Path.GetFileName(motlistPath);
         var marker = stem.IndexOf(".motlist", StringComparison.OrdinalIgnoreCase);
         if (marker > 0) stem = stem[..marker];
 
         var outputs = new List<string>();
         var dmcPlans = Dmc5NeroMotionComposition.Plans(motlist, motlistPath);
+        var riseTrees = motlist.Header.version == ReeLib.Motlist.MotlistVersion.MHR
+            ? motlist.Motions.Select((m, i) => (m, i)).Where(x => x.m.MotFile is MotTreeFile)
+                .ToDictionary(x => x.i, x => RiseMotionTrees.Describe(motlist, motlistPath, x.i, fileResolver)) : [];
+        var invalid = riseTrees.Where(t => !t.Value.Available).ToArray();
+        if (invalid.Length > 0) throw new InvalidDataException("列表包含不可导出的组合，请单独导出可用动作："
+            + string.Join("；", invalid.Select(t => $"编号 {motlist.Motions[t.Key].motNumber}：{t.Value.Description}")));
         var exportableCount = motlist.Motions.Select((m, i) => (m, i))
-            .Count(x => x.m.MotFile is MotFile || dmcPlans.Any(p => p.TreeIndex == x.i));
+            .Count(x => x.m.MotFile is MotFile || dmcPlans.Any(p => p.TreeIndex == x.i) || riseTrees.ContainsKey(x.i));
         var boneNames = skeletonMesh.Bones.Select(bone => bone.Name).ToArray();
         var exporter = new ViewportExportService(_unityAxes);
         var visibleGroups = skeletonMesh.Groups.Select(group => group.Key).ToHashSet();
         for (var index = 0; index < motlist.Motions.Count; index++)
         {
             var motion = motlist.Motions[index];
-            if (motion.MotFile is not MotFile && !dmcPlans.Any(p => p.TreeIndex == index)) continue;
+            if (motion.MotFile is not MotFile && !dmcPlans.Any(p => p.TreeIndex == index) && !riseTrees.ContainsKey(index)) continue;
             var outputPath = Path.Combine(outputDirectory,
                 $"{outputs.Count + 1:D3}_{SafeName(stem)}_motion{index:D3}_id{motion.motNumber}.glb");
             var clip = BuildExportClip(motlist, index, boneNames, skeletonMesh, motlistPath, fileResolver);
@@ -87,7 +92,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         Action<int, int>? progress = null,
         Func<string, Stream?>? fileResolver = null)
     {
-        if (Dmc5NeroMotionComposition.AppliesTo(motlistPath)
+        if (Dmc5NeroMotionComposition.AppliesTo(motlistPath) || RiseMotionTrees.AppliesTo(motlistPath)
             || (KunitsuLegacyLegAxes.IsDamageList(motlistPath) && meshPath.EndsWith(".mesh.240306278", StringComparison.OrdinalIgnoreCase)))
         {
             var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
@@ -125,7 +130,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         string outputPath, int motionIndex = 0,
         Func<string, Stream?>? fileResolver = null)
     {
-        if (Dmc5NeroMotionComposition.AppliesTo(motlistPath))
+        if (Dmc5NeroMotionComposition.AppliesTo(motlistPath) || RiseMotionTrees.AppliesTo(motlistPath))
         {
             var viewport = ViewportDataLoader.LoadMesh(meshStream, meshPath, openResource: fileResolver, loadTextures: false);
             using var resolvedDmc = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
@@ -184,6 +189,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                     if (q.W < 0) q = new Quaternion(-q.X, -q.Y, -q.Z, -q.W);
                     keys[t] = poseTrack.ResolveRotation(Quaternion.Normalize(q), binding);
                 }
+                AnimationClock.Extend(keys, AnimationClock.Duration(mot));
                 node.WithLocalRotation(animName, keys);
             }
 
@@ -197,16 +203,18 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                     var t = frames != null && i < frames.Length ? frames[i] / (float)fps : i / (float)fps;
                     keys[t] = poseTrack.ResolveTranslation(translations[i], binding);
                 }
+                AnimationClock.Extend(keys, AnimationClock.Duration(mot));
                 node.WithLocalTranslation(animName, keys);
             }
 
-            if (mot.Header.version == MotVersion.RE_RT &&
+            if (mot.Header.version is MotVersion.RE_RT or MotVersion.MHR &&
                 clip.HasScale && clip.Scale!.translations is { Length: > 0 } scales)
             {
                 var fps = TrackFrameRate(clip.Scale);
                 var times = BuildTimes(clip.Scale.frameIndexes, scales.Length, fps);
                 var keys = new Dictionary<float, Vector3>(scales.Length);
                 for (var i = 0; i < scales.Length; i++) keys[times[i]] = scales[i];
+                AnimationClock.Extend(keys, AnimationClock.Duration(mot));
                 node.WithLocalScale(animName, keys);
             }
             applied++;
@@ -228,6 +236,13 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
     private static AnimationClip BuildExportClip(MotlistFile list, int index, IReadOnlyList<string> boneNames,
         ViewportMesh mesh, string path, Func<string, Stream?>? resolver)
     {
+        if (list.Header.version == ReeLib.Motlist.MotlistVersion.MHR)
+        {
+            if (list.Motions[index].MotFile is MotTreeFile)
+                return RiseMotionTrees.Load(list, path, index, resolver, boneNames, [mesh]);
+            if (list.Motions[index].MotFile is MotFile direct)
+                return ViewportDataLoader.BuildMotClip(direct, list.Motions[index].motNumber, path, boneNames, [mesh]);
+        }
         if (Dmc5NeroMotionComposition.Resolve(list, path, index) is { } plan)
             return Dmc5NeroMotionComposition.Load(list, path, plan, boneNames, [mesh], resolver);
         var motion = list.Motions.ElementAtOrDefault(index)
@@ -255,7 +270,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         var tracks = new Dictionary<int, BoneTrack>();
         var namedTracks = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);
         var duration = 0f;
-        var sourceFrameRate = 60;
+        var sourceFrameRate = mot.Header.FrameRate > 0 ? (int)mot.Header.FrameRate : 60;
         var sourceFrameCount = 0;
         foreach (var clip in mot.BoneClips)
         {
@@ -299,7 +314,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
                 duration = Math.Max(duration, maxFrame / fps);
             }
 
-            if (mot.Header.version == MotVersion.RE_RT &&
+            if (mot.Header.version is MotVersion.RE_RT or MotVersion.MHR &&
                 clip.HasScale && clip.Scale!.translations is { Length: > 0 } scales)
             {
                 var fps = TrackFrameRate(clip.Scale);
@@ -330,6 +345,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             Tracks = tracks,
             NamedTracks = namedTracks,
         };
+        AnimationClock.Preserve(result, mot);
         result = KunitsuLegacyLegAxes.Retarget(mot, motionNumber, motlistPath, result, meshBoneNames);
         return skeletonMesh.JointConstraints?.Bake(skeletonMesh, result) ?? result;
     }

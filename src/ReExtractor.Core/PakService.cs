@@ -14,6 +14,9 @@ public sealed record PakExtractionResult(int Exported, int Failed, IReadOnlyList
 /// </summary>
 public sealed class PakService
 {
+    private MotionTreeResources? _motionTreeResources;
+    public MotionTreeResources MotionTreeResources => _motionTreeResources ??= new(ReadFile,
+        _knownPaths.Values.Concat(_folderFiles.Keys).Concat(_folderAliases.Keys));
     public MaterialResolver CreateMaterialResolver(IReadOnlyDictionary<string, string>? choices = null)
         => new(_knownPaths.Values.Concat(_folderFiles.Keys).Concat(_folderAliases.Keys), choices);
     private readonly List<string> _pakFiles = new();
@@ -38,6 +41,7 @@ public sealed class PakService
         if (new FileInfo(pakPath).Length == 0)
             throw new InvalidDataException($"PAK file is empty: {pakPath}");
         _pakFiles.Add(pakPath);
+        _motionTreeResources = null;
         _pakEntrySources.Clear();
         _pakEntryIndexReady = false;
     }
@@ -53,6 +57,7 @@ public sealed class PakService
     /// </summary>
     public void AddFolder(string folderPath)
     {
+        _motionTreeResources = null;
         if (!Directory.Exists(folderPath))
             throw new DirectoryNotFoundException($"Resource folder not found: {folderPath}");
 
@@ -82,6 +87,7 @@ public sealed class PakService
     /// <summary>Load a RE list file (one native path per line) to resolve entry hashes into paths.</summary>
     public int LoadListFile(string listPath)
     {
+        _motionTreeResources = null;
         var count = 0;
         foreach (var rawLine in File.ReadLines(listPath))
         {

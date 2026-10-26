@@ -312,7 +312,8 @@ advanced.IsExpanded=false;
 if(motion.ItemCount!=3||additive.SelectedIndex!=1)throw new Exception("Reset filter or confirmed pair not restored");
 if(raw.IsChecked==true||motion.SelectedIndex!=2||!additive.IsEnabled)throw new Exception("Closing advanced must restore prior base");
 Load("natives/stm/sf6/test.motlist.653",motions);
-if(!panel.IsVisible||motion.ItemCount!=6)throw new Exception("Other games must retain raw indices");
+// The RE4 layer panel is scoped to RE4; other games retain their raw choices.
+if(panel.IsVisible||motion.ItemCount!=6)throw new Exception("Other games must retain raw indices without RE4 layer controls");
 Load(re4,[motions[1]]);
 if(additive.ItemCount!=1)throw new Exception("Absent layer offered");
 Load(re4,realMotions);

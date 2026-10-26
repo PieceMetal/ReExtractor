@@ -239,6 +239,19 @@
                         HorizontalAlignment="Right" SelectionChanged="OnMotionChanged"
                         IsVisible="False"/>
             </WrapPanel>
+            <Border x:Name="MotionTreePanel" IsVisible="False" Margin="0,8,0,0" Padding="10"
+                    BorderBrush="#36516c" BorderThickness="1" CornerRadius="4">
+              <StackPanel Spacing="6">
+                <TextBlock x:Name="MotionTreeDescription" TextWrapping="Wrap" FontSize="12"/>
+                <WrapPanel>
+                  <TextBlock x:Name="MotionTreeVariableName" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                  <NumericUpDown x:Name="MotionTreeValue" Width="115" Increment="0.1" FormatString="0.00"
+                                 ValueChanged="OnMotionTreeValueChanged"/>
+                  <ComboBox x:Name="MotionTreeSources" Width="320" Margin="12,0,6,0"/>
+                  <Button Content="查看源动作" Click="OnMotionTreeSourceClicked"/>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
             <Border x:Name="BlendPreviewPanel" IsVisible="False" Margin="0,10,0,0"
                     Padding="12" Background="#192838" BorderBrush="#36516c" BorderThickness="1" CornerRadius="6">
               <StackPanel Spacing="8">

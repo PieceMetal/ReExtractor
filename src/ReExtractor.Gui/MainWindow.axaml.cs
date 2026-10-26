@@ -2382,6 +2382,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private int _loadedPreviewRequest = -1;
     private int _loadedAdditiveSource = -1;
     private bool _loadedRawMode;
+    private decimal? _loadedTreeValue;
+    private string? _loadedTreeDescription;
 
     private void RememberLoadedMotionUi()
     {
@@ -2389,6 +2391,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         _loadedMotionSource = SelectedBaseMotion?.SourceIndex ?? -1;
         _loadedAdditiveSource = SelectedAdditiveMotion?.SourceIndex ?? -1;
         _loadedRawMode = ShowRawMotionTracks.IsChecked == true;
+        _loadedTreeValue = SelectedBaseMotion?.Tree?.Variable != null ? MotionTreeValue.Value : null;
+        _loadedTreeDescription = MotionTreeDescription.Text;
     }
 
     private void RestoreLoadedMotionUi()
@@ -2401,6 +2405,9 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             PopulatePreviewMotionChoices(_loadedMotionSource);
             AdditiveMotionCombo.SelectedIndex = _relatedPreviewMotions.ToList()
                 .FindIndex(m => m.SourceIndex == _loadedAdditiveSource) + 1;
+            ConfigureMotionTreeUi(SelectedBaseMotion);
+            if (_loadedTreeValue is { } value) MotionTreeValue.Value = value;
+            if (SelectedBaseMotion?.Tree != null) MotionTreeDescription.Text = _loadedTreeDescription;
         }
         finally { _syncingMotionUi = false; }
         UpdateBlendPreviewDescription();
@@ -2431,9 +2438,73 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     private async void OnMotionChanged(object? sender, SelectionChangedEventArgs e)
         => await LoadSelectedMotionAsync(sender);
 
+    private int _treeControlSource = -1;
+    private string? _treeControlPath;
+    private void ConfigureMotionTreeUi(MotionInfo? selected)
+    {
+        var tree = selected?.Tree;
+        var changed = selected?.SourceIndex != _treeControlSource || _currentMotlistPath != _treeControlPath;
+        var wasSyncing = _syncingMotionUi;
+        _syncingMotionUi = true;
+        try
+        {
+            MotionTreePanel.IsVisible = tree != null;
+            MotionTreeDescription.Text = tree?.Description ?? "";
+            MotionTreeVariableName.Text = tree?.Variable?.Name ?? "混合参数";
+            MotionTreeValue.IsEnabled = tree?.Available == true && tree.Variable != null;
+            if (tree?.Variable is { } variable)
+            {
+                MotionTreeValue.Minimum = (decimal)variable.Minimum;
+                MotionTreeValue.Maximum = (decimal)variable.Maximum;
+                if (changed) MotionTreeValue.Value = (decimal)variable.DefaultValue;
+            }
+            if (changed)
+            {
+                MotionTreeSources.ItemsSource = tree?.Sources.Select(s => $"{s.Name}（Bank {s.Bank} · {s.MotionId}）").ToArray();
+                MotionTreeSources.SelectedIndex = tree?.Sources.Count > 0 ? 0 : -1;
+            }
+            _treeControlSource = selected?.SourceIndex ?? -1;
+            _treeControlPath = _currentMotlistPath;
+        }
+        finally { _syncingMotionUi = wasSyncing; }
+    }
+
+    private MotionTreeSettings? SelectedTreeSettings()
+        => SelectedBaseMotion?.Tree?.Variable is { } v && MotionTreeValue.Value is { } value
+            ? new MotionTreeSettings { Variables = new Dictionary<string, float> { [v.Name] = (float)value } } : null;
+
+    private async void OnMotionTreeValueChanged(object? sender, NumericUpDownValueChangedEventArgs e)
+    {
+        if (_syncingMotionUi || SelectedBaseMotion?.Tree?.Available != true) return;
+        await LoadSelectedMotionAsync(sender);
+    }
+
+    private async void OnMotionTreeSourceClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_pak == null || SelectedBaseMotion?.Tree is not { } tree
+            || (uint)MotionTreeSources.SelectedIndex >= tree.Sources.Count) return;
+        var source = tree.Sources[MotionTreeSources.SelectedIndex];
+        var request = ++_previewRequest;
+        var treePath = _currentMotlistPath;
+        try
+        {
+            var pak = _pak;
+            var motions = await Task.Run(() => { using var s = pak.ReadFile(source.ListPath);
+                return ViewportDataLoader.ListMotions(s, source.ListPath, pak.ReadFile); });
+            if (_pak != pak || request != _previewRequest || treePath != _currentMotlistPath) return;
+            var position = motions.ToList().FindIndex(m => m.SourceIndex == source.SourceIndex);
+            if (position < 0) throw new InvalidDataException("源动作不在当前资源列表中");
+            SetMotionListUi(source.ListPath, motions, position);
+            await LoadSelectedMotionAsync(null);
+        }
+        catch (Exception ex) { AppendLog("查看源动作失败：" + ex.Message); }
+    }
+
     private async Task LoadSelectedMotionAsync(object? sender)
     {
         if (_syncingMotionUi || _currentMotlistPath == null || SelectedBaseMotion is not { } selected) return;
+        ConfigureMotionTreeUi(selected);
+        var treeSettings = SelectedTreeSettings();
         if (ReferenceEquals(sender, MotionCombo))
         {
             _syncingMotionUi = true;
@@ -2460,7 +2531,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var clip = await Task.Run(() =>
             {
                 var basis = Re4AnimationResourceCatalog.LoadPreview(pak, motlistPath, selected.SourceIndex,
-                    layerConfiguration, meshBoneNames, sceneMeshes);
+                    layerConfiguration, meshBoneNames, sceneMeshes, treeSettings);
                 if (additiveSource < 0 && layerProfile == null) return basis;
                 AnimationClip? additive = null;
                 if (additiveSource >= 0)
@@ -2504,11 +2575,14 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             if (operation != _previewSeq || request != _previewRequest || motlistPath != _currentMotlistPath) return;
             Viewport.SetAnimation(clip);
             _loadedPreviewRequest = request;
-            RememberLoadedMotionUi();
             ShowTimeline(clip.Duration);
             ActionStatus.Text = $"动画播放中: {clip.Name}（时长 {clip.Duration:F1}s）";
             if (clip.PoseAdaptation is { Length: > 0 } adaptation)
+            {
                 ActionStatus.Text += "；" + adaptation;
+                if (selected.Tree != null) MotionTreeDescription.Text = adaptation;
+            }
+            RememberLoadedMotionUi();
         }
         catch (Exception ex)
         {
@@ -2563,6 +2637,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         _baseMotionBeforeRaw = -1;
         var preferred = (uint)selectedIndex < (uint)motions.Count ? motions[selectedIndex].SourceIndex : -1;
         PopulatePreviewMotionChoices(preferred);
+        ConfigureMotionTreeUi(SelectedBaseMotion);
         RememberLoadedMotionUi();
         BlendPreviewPanel.IsVisible = IsRe4Preview && motions.Count > 0;
         UpdateBlendPreviewDescription();
@@ -2579,8 +2654,13 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         _previewLayerConfiguration = null;
         _loadedMotionComboIndex = -1;
         _loadedMotionSource = -1;
+        _loadedTreeValue = null;
+        _loadedTreeDescription = null;
         _currentMotionIndices = [];
         BlendPreviewPanel.IsVisible = false;
+        MotionTreePanel.IsVisible = false;
+        _treeControlSource = -1;
+        _treeControlPath = null;
         _syncingMotionUi = true;
         MotionCombo.ItemsSource = null;
         MotionCombo.SelectedIndex = -1;

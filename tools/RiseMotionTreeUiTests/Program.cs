@@ -1,0 +1,38 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using ReExtractor.Core;
+using ReExtractor.Gui;
+using System.Reflection;
+
+Environment.SetEnvironmentVariable("REEXTRACTOR_DATA_DIR",Path.GetFullPath("artifacts/rise-tree-ui-data"));
+AppBuilder.Configure<Application>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).SetupWithoutStarting();
+var window=new MainWindow();
+object? Call(string name,params object?[] args)=>typeof(MainWindow).GetMethod(name,BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,args);
+void Check(bool ok,string text){if(!ok)throw new Exception(text);Console.WriteLine("PASS "+text);}
+var variable=new MotionTreeVariable("motionBlendRate",Guid.Empty.ToString(),0,-1,1);
+var source=new MotionTreeSource("natives/stm/player/mot/plw_any_100.motlist.528",27,100,111,"source");
+var composition=new MotionInfo(8,"tree",0){Tree=new(true,"Fixed input",variable,[source])};
+var direct=new MotionInfo(27,"direct",111);
+const string path="natives/stm/player/mot/plw_any_tree_51.motlist.528";
+Call("SetMotionListUi",path,new[]{composition,direct},0);
+var panel=window.FindControl<Border>("MotionTreePanel")!;
+var input=window.FindControl<NumericUpDown>("MotionTreeValue")!;
+var sources=window.FindControl<ComboBox>("MotionTreeSources")!;
+Check(panel.IsVisible&&input.IsEnabled&&input.Value==0&&input.Minimum==-1&&input.Maximum==1&&sources.ItemCount==1,"tree input and source controls");
+input.Value=0.5m;
+var settings=(MotionTreeSettings)Call("SelectedTreeSettings")!;
+Check(settings.Variables[variable.Name]==0.5f,"selected blend input reaches loader settings");
+Call("RememberLoadedMotionUi");
+var motions=window.FindControl<ComboBox>("MotionCombo")!;motions.SelectedIndex=1;
+Call("RestoreLoadedMotionUi");
+Check(panel.IsVisible&&motions.SelectedIndex==0&&input.Value==0.5m&&sources.ItemCount==1,"failed selection restores the loaded blend value and matching source controls");
+motions.SelectedIndex=1;
+Check(!panel.IsVisible&&Call("SelectedTreeSettings")==null,"ordinary motions do not inherit tree inputs");
+var indices=(int[])typeof(MainWindow).GetField("_currentMotionIndices",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!;
+Check(indices[motions.SelectedIndex]==27,"source index survives tree listing");
+var unavailable=composition with {Tree=new(false,"缺少源动作",null,[source])};
+Call("SetMotionListUi",path,new[]{unavailable},0);
+Check(panel.IsVisible&&!input.IsEnabled&&sources.ItemCount==1&&window.FindControl<TextBlock>("MotionTreeDescription")!.Text=="缺少源动作","unavailable combinations retain source navigation and diagnosis");
+Call("ClearMotionState");Check(!panel.IsVisible&&!motions.IsVisible,"tree controls clear with motion state");
+window.Close();Console.WriteLine("RISE_TREE_UI_PASS 7 checks; no native window opened");

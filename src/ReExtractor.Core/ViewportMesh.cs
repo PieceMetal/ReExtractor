@@ -592,8 +592,11 @@ public sealed class BoneTrack
     public Vector3[]? Scales;
 }
 
-/// <summary>One embedded, directly readable motion in a MotionList.</summary>
-public sealed record MotionInfo(int SourceIndex, string DisplayName, int MotionNumber);
+/// <summary>A selectable direct motion or a fixed-input composition, with diagnostics.</summary>
+public sealed record MotionInfo(int SourceIndex, string DisplayName, int MotionNumber)
+{
+    public MotionTreeDescription? Tree { get; init; }
+}
 
 /// <summary>Loads ViewportMesh / AnimationClip from RE files (parse only, no rendering deps).</summary>
 public static class ViewportDataLoader
@@ -1783,11 +1786,17 @@ public static class ViewportDataLoader
         var baseName = cut > 0 ? fileName[..cut] : fileName;
         var dmcPlans = Dmc5NeroMotionComposition.Plans(motlist, motlistPath);
         return motlist.Motions.Select((motion, index) => (motion, index))
-            .Where(item => item.motion.MotFile is MotFile || dmcPlans.Any(p => p.TreeIndex == item.index))
-            .Select(item => new MotionInfo(item.index,
-                $"{item.motion.MotFile!.Name}（编号 {item.motion.motNumber}）"
+            .Where(item => item.motion.MotFile is MotFile || dmcPlans.Any(p => p.TreeIndex == item.index)
+                || (motlist.Header.version == ReeLib.Motlist.MotlistVersion.MHR && item.motion.MotFile is MotTreeFile))
+            .Select(item =>
+            {
+                var tree = motlist.Header.version == ReeLib.Motlist.MotlistVersion.MHR && item.motion.MotFile is MotTreeFile
+                    ? RiseMotionTrees.Describe(motlist, motlistPath, item.index, fileResolver) : null;
+                return new MotionInfo(item.index, $"{item.motion.MotFile!.Name}（编号 {item.motion.motNumber}）"
+                    + (tree == null ? "" : tree.Available ? " · 组合预览" : " · 组合不可用：" + tree.Description)
                     + (dmcPlans.Any(p => p.TreeIndex == item.index || p.LowerIndex == item.index) ? " · 正前方组合" : ""),
-                item.motion.motNumber))
+                    item.motion.motNumber) { Tree = tree };
+            })
             .ToList();
     }
 
@@ -1837,7 +1846,7 @@ public static class ViewportDataLoader
         IReadOnlyList<string>? meshBoneNames = null,
         IReadOnlyList<ViewportMesh>? sceneMeshes = null,
         Func<string, Stream?>? fileResolver = null, bool applyGameRetargeting = true,
-        bool composeDmc5Motions = true)
+        bool composeDmc5Motions = true, MotionTreeSettings? treeSettings = null)
     {
         using var resolved = ResolvedMotionList.Read(motlistStream, motlistPath, fileResolver);
         var motlist = resolved.List;
@@ -1845,8 +1854,17 @@ public static class ViewportDataLoader
             ?? throw new InvalidDataException($"Motion index {motionIndex} out of range");
         if (composeDmc5Motions && Dmc5NeroMotionComposition.Resolve(motlist, motlistPath, motionIndex) is { } dmcPlan)
             return Dmc5NeroMotionComposition.Load(motlist, motlistPath, dmcPlan, meshBoneNames, sceneMeshes, fileResolver);
+        if (motlist.Header.version == ReeLib.Motlist.MotlistVersion.MHR && motion.MotFile is MotTreeFile)
+            return RiseMotionTrees.Load(motlist, motlistPath, motionIndex, fileResolver, meshBoneNames, sceneMeshes, treeSettings);
         if (motion.MotFile is not MotFile mot)
             throw new NotSupportedException($"动作编号 {motion.motNumber} 没有可读取的 MOT 数据（基础列表未提供对应动作，或该槽位为动作树/外部动作链接）：{motlistPath}");
+        return BuildMotClip(mot, motion.motNumber, motlistPath, meshBoneNames, sceneMeshes, applyGameRetargeting);
+    }
+
+    internal static AnimationClip BuildMotClip(MotFile mot, int motionNumber, string motlistPath,
+        IReadOnlyList<string>? meshBoneNames = null, IReadOnlyList<ViewportMesh>? sceneMeshes = null,
+        bool applyGameRetargeting = true, bool bakeConstraints = true)
+    {
         var usesReferencePoseTracks = (int)mot.Header.version == 892;
 
         // Validate before appending helper bones: adding MOT bones must not make
@@ -1899,7 +1917,7 @@ public static class ViewportDataLoader
         var tracks = new Dictionary<int, BoneTrack>();
         var namedTracks = new Dictionary<string, BoneTrack>(StringComparer.OrdinalIgnoreCase);
         var duration = 0f;
-        var sourceFrameRate = 60;
+        var sourceFrameRate = mot.Header.FrameRate > 0 ? (int)mot.Header.FrameRate : 60;
         var sourceFrameCount = 0;
         var targetBoneNames = meshBoneNames;
         foreach (var clip in mot.BoneClips)
@@ -1952,7 +1970,7 @@ public static class ViewportDataLoader
             }
             // RE2 RT muscle/cloth helpers carry non-unit scale channels.
             // Keep their native absolute local scale; dropping these changes skinning.
-            if (mot.Header.version == MotVersion.RE_RT &&
+            if (mot.Header.version is MotVersion.RE_RT or MotVersion.MHR &&
                 clip.HasScale && clip.Scale!.translations is { Length: > 0 } scales)
             {
                 var fps = TrackFrameRate(clip.Scale);
@@ -1978,13 +1996,14 @@ public static class ViewportDataLoader
         }
         var result = new AnimationClip
         {
-            Name = $"mot_{motion.motNumber}", Duration = duration,
+            Name = $"mot_{motionNumber}", Duration = duration,
             FrameRate = sourceFrameRate, FrameCount = sourceFrameCount,
             Tracks = tracks, NamedTracks = namedTracks,
         };
+        AnimationClock.Preserve(result, mot);
         if (applyGameRetargeting)
-            result = KunitsuLegacyLegAxes.Retarget(mot, motion.motNumber, motlistPath, result, meshBoneNames);
-        return poseDriver?.JointConstraints?.Bake(poseDriver, result) ?? result;
+            result = KunitsuLegacyLegAxes.Retarget(mot, motionNumber, motlistPath, result, meshBoneNames);
+        return bakeConstraints ? poseDriver?.JointConstraints?.Bake(poseDriver, result) ?? result : result;
     }
 
     /// <summary>

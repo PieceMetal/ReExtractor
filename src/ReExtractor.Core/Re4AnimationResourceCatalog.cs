@@ -72,14 +72,14 @@ public sealed class Re4AnimationResourceCatalog(PakService pak)
 
     public static AnimationClip LoadPreview(PakService pak, string path, int index,
         ResolvedAnimationLayers? configuration, IReadOnlyList<string>? boneNames = null,
-        IReadOnlyList<ViewportMesh>? meshes = null)
+        IReadOnlyList<ViewportMesh>? meshes = null, MotionTreeSettings? treeSettings = null)
     {
         var source = configuration?.Sources?.SingleOrDefault(s => s.ListPath.Equals(path.Replace('\\', '/'),
             StringComparison.OrdinalIgnoreCase) && s.Motion.SourceIndex == index);
         var sourcePath = source?.SourcePath ?? path;
         using var stream = pak.ReadFile(sourcePath);
         var clip = ViewportDataLoader.LoadAnimation(stream, sourcePath, source?.SourceIndex ?? index, boneNames, meshes,
-            pak.ReadFile);
+            pak.ReadFile, treeSettings: treeSettings);
         // Fixed HOLD inputs often store just a static key at frame zero while
         // declaring a longer authored loop. Preserve that inspection window
         // for these resolved inputs, without changing generic/raw-all export.
