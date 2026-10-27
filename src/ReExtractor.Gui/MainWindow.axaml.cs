@@ -2311,8 +2311,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     {
         var path = SelectedBaseMotion?.InheritedFromListPath;
         MotionInheritanceInfo.IsVisible = !string.IsNullOrEmpty(path);
-        MotionInheritanceInfo.Text = path == null ? "" : "当前动作继承自基础列表：" + Path.GetFileName(path);
-        ToolTip.SetTip(MotionInheritanceInfo, path);
+        MotionInheritanceInfo.Text = path == null ? "" : $"当前列表：{Path.GetFileName(_currentMotlistPath)}（{_previewMotions.Count} 个动作）；所选动作来自：{Path.GetFileName(path)}";
+        ToolTip.SetTip(MotionInheritanceInfo, path == null ? null : $"当前列表：{_currentMotlistPath}\n动作来源：{path}");
     }
 
     private void ResetAdditiveChoices()

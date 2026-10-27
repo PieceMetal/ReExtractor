@@ -22,9 +22,19 @@ using var result = JsonDocument.Parse(File.ReadAllText(session + ".result.json")
 if (!result.RootElement.GetProperty("Ready").GetBoolean()) throw new Exception(result.RootElement.ToString());
 var combo = window.FindControl<ComboBox>("MotionCombo")!;
 var motions = (IReadOnlyList<MotionInfo>)typeof(MainWindow).GetField("_visiblePreviewMotions", flags)!.GetValue(window)!;
-if (motions.Count != 148 || combo.ItemCount != 148) throw new Exception("Inherited dropdown incomplete");
+var em112 = result.RootElement.GetProperty("Meshes").EnumerateArray().Any(m => m.GetString()?.Contains("ch102_00_00.mesh", StringComparison.OrdinalIgnoreCase) == true);
+var expectedCount = em112 ? 67 : 148;
+if (motions.Count != expectedCount || combo.ItemCount != expectedCount) throw new Exception("Inherited dropdown incomplete");
+if (em112)
+{
+    var info = window.FindControl<TextBlock>("MotionInheritanceInfo")!;
+    if (!info.IsVisible || !info.Text!.Contains("em112_00_01_attack.motlist.1036") ||
+        !info.Text.Contains("Em106_00_01_Attack.motlist.1036") ||
+        motions.Any(m => !m.InheritedFromListPath!.EndsWith("em106_00_01_attack.motlist.1036", StringComparison.OrdinalIgnoreCase)))
+        throw new Exception("Em112 source hint or inherited entries missing");
+}
 var viewport = window.FindControl<Control>("Viewport")!;
-foreach (var index in new[] { 0, 73, 147, 0 })
+foreach (var index in em112 ? new[] { 0, 33, 66, 0 } : new[] { 0, 73, 147, 0 })
 {
     typeof(MainWindow).GetField("_syncingMotionUi", flags)!.SetValue(window, true);
     combo.SelectedIndex = index;
@@ -45,7 +55,7 @@ foreach (var index in new[] { 0, 73, 147, 0 })
     Console.WriteLine($"GUI_SWITCH_PASS index={index} id={motions[index].MotionNumber} tracks={clip.NamedTracks.Count}");
 }
 window.Close();
-Console.WriteLine("HEADLESS_INHERITED_PREVIEW_PASS 148 dropdown entries, 4 motion switches, 12 finite skinned poses");
+Console.WriteLine($"HEADLESS_INHERITED_PREVIEW_PASS {expectedCount} dropdown entries, 4 motion switches, 12 finite skinned poses");
 
 void Wait(Task task)
 {

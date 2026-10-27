@@ -18,7 +18,8 @@ if (args.Length == 1 && args[0] == "--inheritance")
     var set = typeof(MainWindow).GetMethod("SetMotionListUi", flags)!;
     set.Invoke(main, ["natives/stm/motion/derived.motlist.1036", sourceMotions, 0]);
     var info = main.FindControl<TextBlock>("MotionInheritanceInfo")!;
-    if (!info.IsVisible || !info.Text!.Contains("base.motlist.1036") || ToolTip.GetTip(info) as string != sourceMotions[0].InheritedFromListPath) throw new Exception("Inherited source missing");
+    if (!info.IsVisible || !info.Text!.Contains("derived.motlist.1036") || !info.Text.Contains("base.motlist.1036") ||
+        !(ToolTip.GetTip(info) as string ?? "").Contains(sourceMotions[0].InheritedFromListPath!)) throw new Exception("Inherited source missing");
     main.FindControl<ComboBox>("MotionCombo")!.SelectedIndex = 1;
     if (info.IsVisible || info.Text != "") throw new Exception("Local action inherited label stale");
     set.Invoke(main, ["natives/stm/motion/derived.motlist.1036", sourceMotions, 0]);
