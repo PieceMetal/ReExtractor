@@ -239,6 +239,8 @@
                         HorizontalAlignment="Right" SelectionChanged="OnMotionChanged"
                         IsVisible="False"/>
             </WrapPanel>
+            <TextBlock x:Name="MotionInheritanceInfo" IsVisible="False" Margin="0,6,0,0"
+                       FontSize="12" Foreground="#a8bfd5" TextWrapping="Wrap"/>
             <Border x:Name="MotionTreePanel" IsVisible="False" Margin="0,8,0,0" Padding="10"
                     BorderBrush="#36516c" BorderThickness="1" CornerRadius="4">
               <StackPanel Spacing="6">

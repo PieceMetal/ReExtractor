@@ -26,6 +26,9 @@ internal static class SyntheticRegression
             Require(motions.Select(m => m.MotionNumber).SequenceEqual(new[] { 20, 10, 10 }), "ID mapping");
             Require(motions[0].DisplayName.StartsWith("twenty") && motions[1].DisplayName.StartsWith("ten-switch-one") &&
                 motions[2].DisplayName.StartsWith("local-ten"), "reordered IDs, switch match, local override");
+            Require(string.Equals(motions[0].InheritedFromListPath, "natives/stm/motion/base.motlist.1036", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(motions[1].InheritedFromListPath, "natives/stm/motion/base.motlist.1036", StringComparison.OrdinalIgnoreCase) &&
+                motions[2].InheritedFromListPath == null, "per-motion inherited and local origins");
         }
         Require(streams.All(stream => !stream.CanRead), "dependency stream disposal on success");
         using (var stream = new MemoryStream(derived))
@@ -43,8 +46,11 @@ internal static class SyntheticRegression
         };
         Stream? OpenChain(string path) => resources.TryGetValue(path, out var bytes) ? new MemoryStream(bytes) : null;
         using (var stream = new MemoryStream(grandchild))
-            Require(ViewportDataLoader.ListMotions(stream, "natives/stm/motion/grandchild.motlist.1036", OpenChain)
-                .Single().DisplayName.StartsWith("twenty"), "multi-level / explicitly versioned native reference");
+        {
+            var motion = ViewportDataLoader.ListMotions(stream, "natives/stm/motion/grandchild.motlist.1036", OpenChain).Single();
+            Require(motion.DisplayName.StartsWith("twenty") && string.Equals(motion.InheritedFromListPath, "natives/stm/motion/base.motlist.1036", StringComparison.OrdinalIgnoreCase),
+                "multi-level origin is the list containing the actual motion");
+        }
 
         using (var stream = new MemoryStream(derived))
             Expect<FileNotFoundException>(() => ViewportDataLoader.ListMotions(stream, Root, _ => null), "缺少基础动画列表");

@@ -596,6 +596,7 @@ public sealed class BoneTrack
 public sealed record MotionInfo(int SourceIndex, string DisplayName, int MotionNumber)
 {
     public MotionTreeDescription? Tree { get; init; }
+    public string? InheritedFromListPath { get; init; }
 }
 
 /// <summary>Loads ViewportMesh / AnimationClip from RE files (parse only, no rendering deps).</summary>
@@ -1795,7 +1796,8 @@ public static class ViewportDataLoader
                 return new MotionInfo(item.index, $"{item.motion.MotFile!.Name}（编号 {item.motion.motNumber}）"
                     + (tree == null ? "" : tree.Available ? " · 组合预览" : " · 组合不可用：" + tree.Description)
                     + (dmcPlans.Any(p => p.TreeIndex == item.index || p.LowerIndex == item.index) ? " · 正前方组合" : ""),
-                    item.motion.motNumber) { Tree = tree };
+                    item.motion.motNumber) { Tree = tree, InheritedFromListPath = resolved.OriginOf(item.motion) is { } origin
+                        && !origin.Equals(motlistPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase) ? origin : null };
             })
             .ToList();
     }

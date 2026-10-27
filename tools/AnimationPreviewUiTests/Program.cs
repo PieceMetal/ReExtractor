@@ -11,6 +11,21 @@ Environment.SetEnvironmentVariable("REEXTRACTOR_DATA_DIR",Path.GetFullPath("arti
 AppBuilder.Configure<Application>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions{UseHeadlessDrawing=false}).SetupWithoutStarting();
 Application.Current!.Styles.Add(new FluentTheme());Application.Current.RequestedThemeVariant=ThemeVariant.Dark;
 var main=new MainWindow();
+if (args.Length == 1 && args[0] == "--inheritance")
+{
+    var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+    var sourceMotions = new[] { new MotionInfo(0, "source（编号 1）", 1) { InheritedFromListPath = "natives/stm/motion/base.motlist.1036" }, new MotionInfo(1, "local（编号 2）", 2) };
+    var set = typeof(MainWindow).GetMethod("SetMotionListUi", flags)!;
+    set.Invoke(main, ["natives/stm/motion/derived.motlist.1036", sourceMotions, 0]);
+    var info = main.FindControl<TextBlock>("MotionInheritanceInfo")!;
+    if (!info.IsVisible || !info.Text!.Contains("base.motlist.1036") || ToolTip.GetTip(info) as string != sourceMotions[0].InheritedFromListPath) throw new Exception("Inherited source missing");
+    main.FindControl<ComboBox>("MotionCombo")!.SelectedIndex = 1;
+    if (info.IsVisible || info.Text != "") throw new Exception("Local action inherited label stale");
+    set.Invoke(main, ["natives/stm/motion/derived.motlist.1036", sourceMotions, 0]);
+    typeof(MainWindow).GetMethod("ClearMotionState", flags)!.Invoke(main, null);
+    if (info.IsVisible || info.Text != "") throw new Exception("Inheritance label not cleared");
+    main.Close(); Console.WriteLine("INHERITANCE_UI_PASS"); return;
+}
 if(args.Length == 1 && args[0] == "--export-hover")
 {
     main.Show(); Dispatcher.UIThread.RunJobs();

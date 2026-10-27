@@ -1,4 +1,5 @@
 using ReeLib;
+using ReeLib.Motlist;
 
 namespace ReExtractor.Core;
 
@@ -9,9 +10,12 @@ namespace ReExtractor.Core;
 internal sealed class ResolvedMotionList : IDisposable
 {
     private readonly List<MotlistFile> _sources = [];
+    private readonly Dictionary<MotIndex, string> _origins = new();
     private readonly HashSet<string> _activePaths = new(StringComparer.OrdinalIgnoreCase);
 
     public MotlistFile List { get; private set; } = null!;
+
+    public string? OriginOf(MotIndex motion) => _origins.GetValueOrDefault(motion);
 
     public static ResolvedMotionList Read(Stream stream, string path, Func<string, Stream?>? fileResolver)
     {
@@ -46,6 +50,9 @@ internal sealed class ResolvedMotionList : IDisposable
             if (stream.Length < 44) throw new InvalidDataException($"动画列表文件头不完整：{path}");
             if (!list.Read()) throw new InvalidDataException($"无法解析动画列表：{path}");
 
+            foreach (var motion in list.Motions.Where(m => m.MotFile != null))
+                _origins[motion] = key;
+
             // RE4 uses its own configuration-checked preview sources. Its raw
             // list and batch exports must retain the original embedded tracks.
             if (list.Header.version == ReeLib.Motlist.MotlistVersion.RE4) return list;
@@ -78,7 +85,12 @@ internal sealed class ResolvedMotionList : IDisposable
                 var matches = byId[(motion.motNumber, motion.Switch)].Select(m => m.MotFile!).Distinct().ToArray();
                 if (matches.Length > 1)
                     throw new InvalidDataException($"基础动画编号重复，无法确定来源：{basePath}，编号 {motion.motNumber}，分支 {motion.Switch}");
-                if (matches.Length == 1) motion.MotFile = matches[0];
+                if (matches.Length == 1)
+                {
+                    motion.MotFile = matches[0];
+                    var source = byId[(motion.motNumber, motion.Switch)].First(m => m.MotFile == matches[0]);
+                    _origins[motion] = _origins[source];
+                }
             }
             return list;
         }

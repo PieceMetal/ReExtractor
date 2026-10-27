@@ -2304,6 +2304,15 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         MotionCombo.SelectedIndex = selected >= 0 ? selected : _visiblePreviewMotions.Count > 0 ? 0 : -1;
         MotionLabel.Text = ShowRawMotionTracks.IsChecked != true ? "动作轨道" : "原始轨道";
         ResetAdditiveChoices();
+        UpdateMotionInheritanceInfo();
+    }
+
+    private void UpdateMotionInheritanceInfo()
+    {
+        var path = SelectedBaseMotion?.InheritedFromListPath;
+        MotionInheritanceInfo.IsVisible = !string.IsNullOrEmpty(path);
+        MotionInheritanceInfo.Text = path == null ? "" : "当前动作继承自基础列表：" + Path.GetFileName(path);
+        ToolTip.SetTip(MotionInheritanceInfo, path);
     }
 
     private void ResetAdditiveChoices()
@@ -2436,7 +2445,10 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
     }
 
     private async void OnMotionChanged(object? sender, SelectionChangedEventArgs e)
-        => await LoadSelectedMotionAsync(sender);
+    {
+        if (!_syncingMotionUi) UpdateMotionInheritanceInfo();
+        await LoadSelectedMotionAsync(sender);
+    }
 
     private int _treeControlSource = -1;
     private string? _treeControlPath;
@@ -2666,6 +2678,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         MotionCombo.SelectedIndex = -1;
         MotionCombo.IsVisible = false;
         MotionLabel.IsVisible = false;
+        UpdateMotionInheritanceInfo();
         _syncingMotionUi = false;
         PlaybackOverlay.IsVisible = false;
         TimelineSlider.IsVisible = false;
