@@ -82,6 +82,8 @@ public sealed class GlViewport : OpenGlControlBase
 
         public HashSet<int> VisibleGroups = [];
 
+        public int[] VisibleVertexIndices = [];
+
         public uint[] TextureHandles = []; // indexed by Mesh.Textures slot
 
         public bool IsPrimary;
@@ -130,6 +132,10 @@ public sealed class GlViewport : OpenGlControlBase
     private Vector3 _target = Vector3.Zero;
 
     private Vector3 _boundsMin = new(-1), _boundsMax = new(1);
+
+    private Vector3 _animationBoundsMin, _animationBoundsMax;
+    private bool _hasAnimationBounds;
+    private bool _autoFrame = true;
 
     private Avalonia.Point _lastPointer;
 
@@ -354,6 +360,8 @@ public sealed class GlViewport : OpenGlControlBase
 
         base.OnSizeChanged(e);
 
+        if (_autoFrame && Bounds.Width > 1 && Bounds.Height > 1) FitCamera();
+
         RequestNextFrameRendering();
 
     }
@@ -380,6 +388,10 @@ public sealed class GlViewport : OpenGlControlBase
         }
 
         _clip = null;
+
+        _hasAnimationBounds = false;
+
+        _autoFrame = true;
 
         StopPlayback();
 
@@ -437,10 +449,14 @@ public sealed class GlViewport : OpenGlControlBase
         _primary.Tracks = BuildTrackMap(_primary);
         foreach (var extra in _extras) extra.Tracks = BuildTrackMap(extra);
         if (_clip != null)
+        {
             EvaluateAllPose(_time);
+            RebuildAnimationBounds();
+        }
 
         RecalculateVisibleBounds();
         _target = (_boundsMin + _boundsMax) * 0.5f;
+        _autoFrame = true;
         BuildGridLines();
         FitCamera();
         UpdateStatusInfo();
@@ -466,9 +482,16 @@ public sealed class GlViewport : OpenGlControlBase
             _extras.Add(model);
 
         if (_clip != null)
+        {
             EvaluateAllPose(_time);
+            RebuildAnimationBounds();
+        }
 
         RecalculateVisibleBounds();
+
+        _target = (_boundsMin + _boundsMax) * 0.5f;
+
+        _autoFrame = true;
 
         BuildGridLines();
 
@@ -486,7 +509,11 @@ public sealed class GlViewport : OpenGlControlBase
 
     {
 
+        StopPlayback();
+
         _clip = clip;
+
+        _hasAnimationBounds = false;
 
         _time = 0;
 
@@ -498,7 +525,20 @@ public sealed class GlViewport : OpenGlControlBase
 
         foreach (var extra in _extras) extra.Tracks = BuildTrackMap(extra);
 
-        if (clip != null && clip.Duration > 0) PlayFromStart(); else StopPlayback();
+        if (clip != null)
+        {
+            RebuildAnimationBounds();
+            RecalculateVisibleBounds();
+            _target = (_boundsMin + _boundsMax) * 0.5f;
+            _autoFrame = true;
+            FitCamera();
+        }
+        else
+        {
+            RecalculateVisibleBounds();
+        }
+
+        if (clip != null && clip.Duration > 0) PlayFromStart();
 
         StateChanged?.Invoke();
 
@@ -573,6 +613,8 @@ public sealed class GlViewport : OpenGlControlBase
 
         EvaluateAllPose(_time);
 
+        ExpandAnimationBoundsToCurrentPose();
+
         RequestNextFrameRendering();
 
     }
@@ -593,7 +635,15 @@ public sealed class GlViewport : OpenGlControlBase
 
         QueueIndexUpdate(_primary);
 
+        RebuildAnimationBounds();
+
         RecalculateVisibleBounds();
+
+        if (_autoFrame)
+        {
+            _target = (_boundsMin + _boundsMax) * 0.5f;
+            FitCamera();
+        }
 
         UpdateStatusInfo();
 
@@ -614,6 +664,8 @@ public sealed class GlViewport : OpenGlControlBase
         _primary.VisibleGroups = _primary.Mesh.Groups.Where(g => g.DefaultVisible).Select(g => g.Key).ToHashSet();
 
         QueueIndexUpdate(_primary);
+
+        RebuildAnimationBounds();
 
         RecalculateVisibleBounds();
 
@@ -639,7 +691,15 @@ public sealed class GlViewport : OpenGlControlBase
 
         QueueIndexUpdate(_primary);
 
+        RebuildAnimationBounds();
+
         RecalculateVisibleBounds();
+
+        if (_autoFrame)
+        {
+            _target = (_boundsMin + _boundsMax) * 0.5f;
+            FitCamera();
+        }
 
         UpdateStatusInfo();
 
@@ -661,6 +721,8 @@ public sealed class GlViewport : OpenGlControlBase
 
         QueueIndexUpdate(_primary);
 
+        RebuildAnimationBounds();
+
         RecalculateVisibleBounds();
 
         UpdateStatusInfo();
@@ -680,6 +742,8 @@ public sealed class GlViewport : OpenGlControlBase
         if (!TryGetPrimaryGroupBounds(key, out var min, out var max)) return;
 
         _target = (min + max) * 0.5f;
+
+        _autoFrame = false;
 
         FitCamera(min, max);
 
@@ -738,6 +802,7 @@ public sealed class GlViewport : OpenGlControlBase
         }
 
         _target = point;
+        _autoFrame = false;
         var sceneSize = MathF.Max(0.1f, (_boundsMax - _boundsMin).Length());
         _dist = MathF.Max(0.18f, sceneSize * 0.2f);
         RequestNextFrameRendering();
@@ -765,6 +830,8 @@ public sealed class GlViewport : OpenGlControlBase
         _orbiting = orbit;
 
         _panning = pan;
+
+        if (pan) _autoFrame = false;
 
     }
 
@@ -852,7 +919,10 @@ public sealed class GlViewport : OpenGlControlBase
 
         var factor = MathF.Exp((float)-wheelDelta * 0.12f);
 
-        _dist = Math.Clamp(_dist * factor, 0.05f, 1000f);
+        var maxDistance = MathF.Max(1000f, (_boundsMax - _boundsMin).Length() * 10f);
+        _dist = Math.Clamp(_dist * factor, 0.05f, maxDistance);
+
+        _autoFrame = false;
 
         RequestNextFrameRendering();
 
@@ -919,6 +989,8 @@ public sealed class GlViewport : OpenGlControlBase
         RecalculateVisibleBounds();
         _target = (_boundsMin + _boundsMax) * 0.5f;
 
+        _autoFrame = true;
+
         FitCamera();
 
         RequestNextFrameRendering();
@@ -958,6 +1030,10 @@ public sealed class GlViewport : OpenGlControlBase
         // Max-style named views are orthographic; User/Perspective is perspective.
 
         Projection = preset == ViewPreset.Perspective ? ViewportProjection.Perspective : ViewportProjection.Orthographic;
+
+        _target = (_boundsMin + _boundsMax) * 0.5f;
+
+        _autoFrame = true;
 
         FitCamera();
 
@@ -1026,6 +1102,8 @@ public sealed class GlViewport : OpenGlControlBase
         if (_time >= _clip.Duration) _time %= _clip.Duration;
 
         EvaluateAllPose(_time);
+
+        ExpandAnimationBoundsToCurrentPose();
 
         RequestNextFrameRendering();
 
@@ -1159,6 +1237,11 @@ public sealed class GlViewport : OpenGlControlBase
         model.Batches = batches.ToArray();
 
         model.IndexCount = indices.Count;
+
+        // The same face visibility used for rendering also drives camera bounds.
+        // Cache unique vertices so playback does not rescan every triangle each frame.
+        model.VisibleVertexIndices = indices.Distinct().Where(i => i < mesh.Vertices.Length)
+            .Select(i => (int)i).ToArray();
 
 
 
@@ -2007,6 +2090,7 @@ public sealed class GlViewport : OpenGlControlBase
         RecalculateVisibleBounds();
 
         _target = (_boundsMin + _boundsMax) * 0.5f;
+        _autoFrame = true;
         CurrentView = ViewPreset.Perspective;
 
         Projection = ViewportProjection.Perspective;
@@ -2027,59 +2111,101 @@ public sealed class GlViewport : OpenGlControlBase
 
     {
 
-        var min = new Vector3(float.MaxValue);
+        if (!TryGetVisiblePoseBounds(out var min, out var max))
+        {
+            min = new Vector3(-0.5f);
+            max = new Vector3(0.5f);
+        }
 
-        var max = new Vector3(float.MinValue);
+        if (_hasAnimationBounds)
+        {
+            min = Vector3.Min(min, _animationBoundsMin);
+            max = Vector3.Max(max, _animationBoundsMax);
+        }
 
+        _boundsMin = min;
+        _boundsMax = max;
+        BuildGridLines();
+
+    }
+
+    private bool TryGetVisiblePoseBounds(out Vector3 min, out Vector3 max)
+    {
+        var poseMin = new Vector3(float.MaxValue);
+        var poseMax = new Vector3(float.MinValue);
         var found = false;
 
         void IncludeModel(GlModel model)
-
         {
-
-            var mesh = model.Mesh;
-
-            for (var f = 0; f < mesh.FaceCount; f++)
-
+            var positions = model.Posed.Length == model.Mesh.Vertices.Length
+                ? model.Posed : model.Mesh.Vertices;
+            foreach (var index in model.VisibleVertexIndices)
             {
-
-                if (!IsFaceVisible(model, f)) continue;
-
-                var (a, b, c) = mesh.Faces[f];
-
-                foreach (var index in new[] { a, b, c })
-
-                {
-
-                    if ((uint)index >= (uint)mesh.Vertices.Length) continue;
-
-                    var positions = model.Posed.Length == mesh.Vertices.Length ? model.Posed : mesh.Vertices;
-
-                    var v = Vector3.Transform(positions[index], ReToUeWorld);
-
-                    min = Vector3.Min(min, v);
-
-                    max = Vector3.Max(max, v);
-
-                    found = true;
-
-                }
-
+                var p = positions[index];
+                var v = new Vector3(-p.X, p.Z, p.Y);
+                if (!float.IsFinite(v.X) || !float.IsFinite(v.Y) || !float.IsFinite(v.Z)) continue;
+                poseMin = Vector3.Min(poseMin, v);
+                poseMax = Vector3.Max(poseMax, v);
+                found = true;
             }
-
         }
 
         if (_primary != null) IncludeModel(_primary);
-
         foreach (var extra in _extras) IncludeModel(extra);
+        min = poseMin;
+        max = poseMax;
+        return found;
+    }
 
-        if (!found) { min = new Vector3(-0.5f); max = new Vector3(0.5f); }
+    private void RebuildAnimationBounds()
+    {
+        _hasAnimationBounds = false;
+        if (_clip == null || _primary == null) return;
 
-        _boundsMin = min;
+        var originalTime = _time;
+        var samples = float.IsFinite(_clip.Duration)
+            ? Math.Clamp((int)MathF.Ceiling(_clip.Duration * 2f), 4, 12)
+            : 4;
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        for (var i = 0; i <= samples; i++)
+        {
+            EvaluateAllPose(_clip.Duration * i / samples);
+            if (!TryGetVisiblePoseBounds(out var poseMin, out var poseMax)) continue;
+            min = Vector3.Min(min, poseMin);
+            max = Vector3.Max(max, poseMax);
+            _hasAnimationBounds = true;
+        }
+        EvaluateAllPose(originalTime);
+        if (!_hasAnimationBounds) return;
 
-        _boundsMax = max;
+        // Leave room for extrema between the sampled poses. Playback still expands the
+        // range if a faster movement reaches farther than these samples.
+        var padding = MathF.Max(0.05f, (max - min).Length() * 0.08f);
+        _animationBoundsMin = min - new Vector3(padding);
+        _animationBoundsMax = max + new Vector3(padding);
+    }
 
+    private void ExpandAnimationBoundsToCurrentPose()
+    {
+        if (_clip == null || !TryGetVisiblePoseBounds(out var min, out var max)) return;
+        if (min.X >= _boundsMin.X && min.Y >= _boundsMin.Y && min.Z >= _boundsMin.Z &&
+            max.X <= _boundsMax.X && max.Y <= _boundsMax.Y && max.Z <= _boundsMax.Z) return;
+
+        var padding = MathF.Max(0.05f, (max - min).Length() * 0.08f);
+        min -= new Vector3(padding);
+        max += new Vector3(padding);
+        _animationBoundsMin = _hasAnimationBounds ? Vector3.Min(_animationBoundsMin, min) : min;
+        _animationBoundsMax = _hasAnimationBounds ? Vector3.Max(_animationBoundsMax, max) : max;
+        _hasAnimationBounds = true;
+        _boundsMin = Vector3.Min(_boundsMin, _animationBoundsMin);
+        _boundsMax = Vector3.Max(_boundsMax, _animationBoundsMax);
         BuildGridLines();
+        if (_autoFrame)
+        {
+            _target = (_boundsMin + _boundsMax) * 0.5f;
+            FitCamera();
+        }
 
     }
 
@@ -2175,13 +2301,11 @@ public sealed class GlViewport : OpenGlControlBase
 
         var halfFov = MathF.PI / 8f;
 
-        // Bounding-sphere fit is stable for any orbit angle and never clips tall or wide assets.
-
-        var verticalFit = radius / MathF.Tan(halfFov);
-
-        var horizontalFit = radius / MathF.Tan(MathF.Atan(MathF.Tan(halfFov) * MathF.Max(0.2f, aspect)));
-
-        _dist = MathF.Max(0.1f, MathF.Max(verticalFit, horizontalFit) * 1.02f);
+        // A perspective sphere fits at radius / sin(half FOV), including the
+        // sphere's near side. The old tan fit cut off silhouettes at the edges.
+        var horizontalHalfFov = MathF.Atan(MathF.Tan(halfFov) * MathF.Max(0.1f, aspect));
+        var limitingHalfFov = MathF.Min(halfFov, horizontalHalfFov);
+        _dist = MathF.Max(0.1f, radius / MathF.Sin(limitingHalfFov) * 1.08f);
 
     }
 
@@ -2412,11 +2536,23 @@ public sealed class GlViewport : OpenGlControlBase
 
         var view = Matrix4x4.CreateLookAt(eye, _target, GetCameraUp());
 
-        var radius = MathF.Max(0.05f, (_boundsMax - _boundsMin).Length() * 0.5f);
-
-        var near = MathF.Max(0.001f, _dist - radius * 2.2f);
-
-        var far = MathF.Max(near + 1f, _dist + radius * 3f);
+        // Derive clip planes from the actual box in camera space. Pan, zoom and
+        // animated root movement can put its center far from the orbit target.
+        var forward = Vector3.Normalize(_target - eye);
+        var minDepth = float.MaxValue;
+        var maxDepth = float.MinValue;
+        for (var corner = 0; corner < 8; corner++)
+        {
+            var x = (corner & 1) == 0 ? _boundsMin.X : _boundsMax.X;
+            var y = (corner & 2) == 0 ? _boundsMin.Y : _boundsMax.Y;
+            var z = (corner & 4) == 0 ? _boundsMin.Z : _boundsMax.Z;
+            var depth = Vector3.Dot(new Vector3(x, y, z) - eye, forward);
+            minDepth = MathF.Min(minDepth, depth);
+            maxDepth = MathF.Max(maxDepth, depth);
+        }
+        var depthPadding = MathF.Max(0.05f, (_boundsMax - _boundsMin).Length() * 0.05f);
+        var near = MathF.Max(0.001f, minDepth - depthPadding);
+        var far = MathF.Max(near + 0.1f, maxDepth + depthPadding);
 
         Matrix4x4 proj;
 
@@ -2669,7 +2805,10 @@ public sealed class GlViewport : OpenGlControlBase
         {
         _lineVerts.Clear();
 
-        var modelSize = MathF.Max(0.1f, MathF.Max(_boundsMax.X - _boundsMin.X, _boundsMax.Y - _boundsMin.Y));
+        var modelSize = MathF.Max(0.1f, MathF.Max(
+            MathF.Max(_boundsMax.X - _boundsMin.X, _boundsMax.Y - _boundsMin.Y),
+            MathF.Max(MathF.Max(MathF.Abs(_boundsMin.X), MathF.Abs(_boundsMax.X)),
+                MathF.Max(MathF.Abs(_boundsMin.Y), MathF.Abs(_boundsMax.Y)))));
 
         var exponent = MathF.Floor(MathF.Log10(modelSize));
 
