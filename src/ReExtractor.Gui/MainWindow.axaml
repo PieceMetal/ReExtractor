@@ -540,7 +540,7 @@
             <Border Background="#292631" BorderBrush="#765c91" BorderThickness="1" CornerRadius="6" Padding="10">
               <StackPanel>
                 <TextBlock Text="动画导出" Foreground="#d3a9ff" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <TextBlock Text="每个动画单独导出，仅含骨架与动画，不附带模型网格。"
+                <TextBlock Text="每个动画单独导出，并附带匹配本次骨架的参考姿势。独立导出使用当前骨架；加载动画后骨架可能变化，请重新导出。"
                            TextWrapping="Wrap" Foreground="#9aa6b5" FontSize="11" Margin="0,0,0,8"/>
                 <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto" Margin="0,0,0,7">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="范围" VerticalAlignment="Center" Margin="0,0,8,6"/>
@@ -598,6 +598,8 @@
                     </Grid>
                   </StackPanel>
                 </Border>
+                <Button x:Name="ExportReferencePoseButton" Content="导出参考姿势 FBX" Click="OnExportReferencePoseClicked"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,0,0,7" Padding="10,7"/>
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                   <SplitButton Grid.Column="0" x:Name="ExportAnimButton" Content="导出动画 FBX" Click="OnExportAnimClicked"
                           Background="#65417f" Foreground="White" Padding="10,7">

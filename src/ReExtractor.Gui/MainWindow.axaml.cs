@@ -2863,6 +2863,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var progress = BeginProgress($"正在导出{scopeText}…");
         ActionStatus.Text = $"正在导出{scopeText}…";
         ExportAnimButton.IsEnabled = false;
+        ExportReferencePoseButton.IsEnabled = false;
         ExportAnimScopeCombo.IsEnabled = false;
         try
         {
@@ -2899,13 +2900,15 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                         (current, total) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                             UpdateCountProgress(progress, current, total, "导出动画")),
                         exportFps.ToString());
+                    var animationCount = Directory.GetFiles(workDir, "*.glb").Length;
+                    ExportReferencePoseFbx(merged.Mesh, blender, finalDir, exportFps);
                     WriteAnimationGuide(finalDir, motlistPath);
                     if (exportCurrent) File.AppendAllText(Path.Combine(finalDir, "动画资源使用说明.txt"), "\n本次当前动画按已加载预览导出（包含所选分层）："+exportClip!.Name+"\n作为普通动画播放，不要再次设置为叠加动画。\n");
-                    return (Directory.GetFiles(finalDir, "*.fbx").Length, finalDir);
+                    return (animationCount, finalDir);
                 }
                 finally { TryDeleteDirectory(workDir); }
             });
-            ActionStatus.Text = $"动画导出完成：{result.Item1} 个 FBX | {result.finalDir}";
+            ActionStatus.Text = $"动画导出完成：{result.Item1} 个动画 FBX，已附匹配的参考姿势.fbx | {result.finalDir}";
         }
         catch (Exception ex)
         {
@@ -2914,6 +2917,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         finally
         {
             ExportAnimButton.IsEnabled = true;
+            ExportReferencePoseButton.IsEnabled = true;
             ExportAnimScopeCombo.IsEnabled = true;
             EndProgress(progress);
         }
@@ -2932,6 +2936,56 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         return RisePlayerExportSkeleton.Supports(paths)
             ? RisePlayerExportSkeleton.Build(paths, models, path => pak.ReadFile(path), lodIndex)
             : new ViewportExportService().BuildMergedExportModel(models);
+    }
+
+    private async void OnExportReferencePoseClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_pak == null) { ActionStatus.Text = "请先加载游戏 PAK 和角色模型"; return; }
+        var exportModels = Viewport.ExportModels;
+        var paths = _previewMeshPaths.ToArray();
+        if (exportModels.Count == 0 || paths.Length == 0)
+        { ActionStatus.Text = "请先加载用于生成骨架的角色模型"; return; }
+        if (!await EnsureBlenderReadyAsync()) return;
+        var pak = _pak;
+        var lod = _selectedLod;
+        var blender = CurrentBlenderPath;
+        var finalDir = Path.Combine(Path.GetFullPath(CurrentFbxOutputDirectory),
+            SafeFileName(NativeStem(paths[0], ".mesh")) + "_参考姿势");
+        var progress = BeginProgress("正在导出当前角色骨架的参考姿势…");
+        ExportReferencePoseButton.IsEnabled = false;
+        ExportAnimButton.IsEnabled = false;
+        try
+        {
+            await Task.Run(() =>
+            {
+                EnsureBlender(blender);
+                var models = exportModels.Select(model =>
+                    (model.Mesh, (IReadOnlySet<int>)model.VisibleGroups)).ToArray();
+                var merged = BuildCharacterExportModel(models, paths, pak, lod);
+                ExportReferencePoseFbx(merged.Mesh, blender, finalDir, 60);
+            });
+            ActionStatus.Text = $"参考姿势导出完成（当前角色骨架）：{Path.Combine(finalDir, "参考姿势.fbx")}";
+        }
+        catch (Exception ex) { ActionStatus.Text = "参考姿势导出失败：" + ex.Message; }
+        finally
+        {
+            ExportReferencePoseButton.IsEnabled = true;
+            ExportAnimButton.IsEnabled = true;
+            EndProgress(progress);
+        }
+    }
+
+    private void ExportReferencePoseFbx(ViewportMesh mesh, string blender, string finalDir, int fps)
+    {
+        if (mesh.Bones.Length == 0) throw new InvalidOperationException("当前模型没有可导出的骨架");
+        var workDir = CreateExportWorkDir("reference_pose");
+        try
+        {
+            var groups = mesh.Groups.Select(group => group.Key).ToHashSet();
+            new ViewportExportService(_settings.UnityFbxAxes).ConvertToGlb(mesh, groups, Path.Combine(workDir, "参考姿势.glb"));
+            RunBlenderBatch("export_animations_fbx.py", blender, workDir, finalDir, null, fps.ToString(), "reference");
+        }
+        finally { TryDeleteDirectory(workDir); }
     }
 
     private async Task ExportPreviewModelsFbxAsync()
@@ -3190,7 +3244,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
             var reason = process.ExitCode == 0 ? "未收到脚本完成标记" : $"代码 {process.ExitCode}";
             throw new InvalidOperationException($"FBX 转换失败（{reason}）\n完整记录：{conversionLog}\n{tail}");
         }
-        if (scriptName == "export_animations_fbx.py")
+        if (scriptName == "export_animations_fbx.py" && !extraArgs.Contains("reference"))
             File.WriteAllText(Path.Combine(output, "动画资源使用说明.txt"), AnimationPreviewMixer.ResourceGuide);
     }
 
@@ -3554,6 +3608,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         var progress = BeginProgress($"正在统计 {paths.Length} 个 MotionList…");
         ActionStatus.Text = $"正在批量导出 {paths.Length} 个 MotionList 的全部动画…";
         ExportAnimButton.IsEnabled = false;
+        ExportReferencePoseButton.IsEnabled = false;
         ExportAnimScopeCombo.IsEnabled = false;
         try
         {
@@ -3634,6 +3689,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
                                         UpdateCountProgress(progress, overall, totalWork,
                                             $"导出列表 {listNumber}/{paths.Length} · {stem} {current}/{total}"));
                                 }, exportFps.ToString());
+                            ExportReferencePoseFbx(merged.Mesh, blender, finalDir, exportFps);
                             WriteAnimationGuide(finalDir, motlistPath);
                             exportedFbx += motionCount;
                             successfulLists++;
@@ -3656,8 +3712,8 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
 
             foreach (var failure in result.failures) AppendLog("批量动画跳过：" + failure);
             ActionStatus.Text = result.failures.Count == 0
-                ? $"批量动画导出完成：{result.successfulLists} 个 MotionList，共 {result.exportedFbx} 个 FBX | {result.batchRoot}"
-                : $"批量动画导出完成：{result.successfulLists}/{paths.Length} 个 MotionList，{result.exportedFbx} 个 FBX；跳过 {result.failures.Count} 项，详情见日志 | {result.batchRoot}";
+                ? $"批量动画导出完成：{result.successfulLists} 个 MotionList，共 {result.exportedFbx} 个动画 FBX；各列表已附匹配参考姿势 | {result.batchRoot}"
+                : $"批量动画导出完成：{result.successfulLists}/{paths.Length} 个 MotionList，{result.exportedFbx} 个动画 FBX；成功列表已附匹配参考姿势，跳过 {result.failures.Count} 项，详情见日志 | {result.batchRoot}";
         }
         catch (Exception ex)
         {
@@ -3666,6 +3722,7 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         finally
         {
             ExportAnimButton.IsEnabled = true;
+            ExportReferencePoseButton.IsEnabled = true;
             ExportAnimScopeCombo.IsEnabled = true;
             EndProgress(progress);
         }

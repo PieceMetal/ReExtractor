@@ -29,12 +29,15 @@ export_fbx_bin.fbx_data_object_elements = _write_rest_object_elements
 
 def arguments():
     values = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    if len(values) not in {2, 3}:
+    if len(values) not in {2, 3, 4}:
         raise RuntimeError("Need args: temp GLB directory, animation FBX output directory, optional FPS")
-    fps = int(values[2]) if len(values) == 3 else 60
+    fps = int(values[2]) if len(values) >= 3 else 60
     if fps <= 0:
         raise RuntimeError(f"Invalid animation FPS: {fps}")
-    return values[0], values[1], fps
+    reference_pose = len(values) == 4 and values[3] == "reference"
+    if len(values) == 4 and not reference_pose:
+        raise RuntimeError(f"Unknown export mode: {values[3]}")
+    return values[0], values[1], fps, reference_pose
 
 
 def clear_scene():
@@ -93,7 +96,7 @@ def ensure_export_root(armature):
     return True
 
 
-source_dir, output_dir, export_fps = arguments()
+source_dir, output_dir, export_fps, reference_pose = arguments()
 inputs = sorted(
     os.path.join(source_dir, name)
     for name in os.listdir(source_dir)
@@ -127,8 +130,9 @@ for index, source in enumerate(inputs, start=1):
     primary.data.name = "Armature"
     # Animation FBX targets the skeleton imported with the separate model FBX.
     # Keep the armature and its tracks, without duplicating reference geometry.
-    for mesh in [obj for obj in bpy.data.objects if obj.type == "MESH"]:
-        bpy.data.objects.remove(mesh, do_unlink=True)
+    if not reference_pose:
+        for mesh in [obj for obj in bpy.data.objects if obj.type == "MESH"]:
+            bpy.data.objects.remove(mesh, do_unlink=True)
     for duplicate in armatures[1:]:
         bpy.data.objects.remove(duplicate, do_unlink=True)
     armatures = [primary]
@@ -144,6 +148,9 @@ for index, source in enumerate(inputs, start=1):
     bpy.ops.object.select_all(action="DESELECT")
     for armature in armatures:
         armature.select_set(True)
+    if reference_pose:
+        for mesh in (obj for obj in bpy.data.objects if obj.type == "MESH"):
+            mesh.select_set(True)
     if export_target() == "unity":
         bpy.data.objects["AnimationHierarchy"].select_set(True)
     bpy.context.view_layer.objects.active = armatures[0]
@@ -154,8 +161,8 @@ for index, source in enumerate(inputs, start=1):
     bpy.ops.export_scene.fbx(
         filepath=output_path,
         use_selection=True,
-        object_types={"ARMATURE", "EMPTY"},
-        bake_anim=True,
+        object_types={"ARMATURE", "EMPTY", "MESH"} if reference_pose else {"ARMATURE", "EMPTY"},
+        bake_anim=not reference_pose,
         bake_anim_use_all_actions=False,
         bake_anim_use_nla_strips=False,
         bake_anim_use_all_bones=True,
