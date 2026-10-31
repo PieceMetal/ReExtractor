@@ -5,9 +5,9 @@ namespace ReExtractor.Core;
 /// <summary>Shares the preview driver's pose without discarding each part's inverse bind.</summary>
 internal static class PreviewSkeletonExport
 {
-    public static ViewportMesh Merge(IReadOnlyList<ViewportMesh> meshes)
+    public static ViewportMesh Merge(IReadOnlyList<ViewportMesh> meshes, bool preservePartBindings = false)
     {
-        if (ViewportMesh.TryGetSkeletonUnionCompatibility(meshes, out _)) return ViewportMesh.Merge(meshes);
+        if (!preservePartBindings && ViewportMesh.TryGetSkeletonUnionCompatibility(meshes, out _)) return ViewportMesh.Merge(meshes);
         var driver = meshes.OrderByDescending(m => m.DeformToBone.Length)
             .ThenByDescending(m => m.VertexCount).First();
         var driverNames = driver.Bones.Select((b, i) => (b.Name, i))

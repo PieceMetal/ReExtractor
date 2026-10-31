@@ -13,6 +13,8 @@ namespace ReExtractor.Core;
 /// <summary>Unified geometry + skeleton for real-time viewport rendering (CPU side).</summary>
 public sealed class ViewportMesh
 {
+    // Prepared exports must retain the same hierarchy as the separately exported model.
+    internal bool HasFixedExportSkeleton { get; set; }
     // Export-only aliases: empty means a passive skin joint, never an animation target.
     public Dictionary<string, string> AnimationBoneAliases = new(StringComparer.OrdinalIgnoreCase);
     public required Vector3[] Vertices;              // bind pose
@@ -1893,9 +1895,10 @@ public static class ViewportDataLoader
                     for (MotBone? ancestor = bone; ancestor != null && required.Add(ancestor); ancestor = ancestor.Parent) { }
                 requiredBones = mot.Bones.Where(required.Contains).ToArray();
             }
+            var extensibleMeshes = sceneMeshes.Where(mesh => !mesh.HasFixedExportSkeleton).ToArray();
             if (mot.Header.version == MotVersion.MHR)
-                RestoreMhrAnimationParents(sceneMeshes, mot.Bones);
-            foreach (var sceneMesh in sceneMeshes)
+                RestoreMhrAnimationParents(extensibleMeshes, mot.Bones);
+            foreach (var sceneMesh in extensibleMeshes)
             {
                 AddAnimationBones(sceneMesh, requiredBones);
             }

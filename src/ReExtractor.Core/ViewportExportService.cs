@@ -103,13 +103,14 @@ public sealed class ViewportExportService
     }
 
     public (ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups) BuildMergedExportModel(
-        IReadOnlyList<(ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups)> models)
+        IReadOnlyList<(ViewportMesh Mesh, IReadOnlySet<int> VisibleGroups)> models,
+        bool preservePartBindings = false)
     {
         if (models.Count == 0) throw new ArgumentException("need at least one model", nameof(models));
-        if (models.Count == 1) return (models[0].Mesh, models[0].VisibleGroups);
+        if (models.Count == 1 && !preservePartBindings) return (models[0].Mesh, models[0].VisibleGroups);
 
         var visibleMeshes = models.Select(model => VisibleCopy(model.Mesh, model.VisibleGroups)).ToArray();
-        var merged = PreviewSkeletonExport.Merge(visibleMeshes);
+        var merged = PreviewSkeletonExport.Merge(visibleMeshes, preservePartBindings);
         return (merged, merged.Groups.Select(group => group.Key).ToHashSet());
     }
 
