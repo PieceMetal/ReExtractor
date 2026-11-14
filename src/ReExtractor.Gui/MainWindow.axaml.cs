@@ -3225,12 +3225,11 @@ private void OnListPointerPressed(object? sender, Avalonia.Input.PointerPressedE
         };
         process.BeginOutputReadLine();
         var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(3_600_000))
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException("FBX 转换超过 60 分钟，已停止");
-        }
-        process.WaitForExit(); // ensure asynchronous OutputDataReceived has drained
+        // A single MotionList can legitimately take hours. Do not kill healthy
+        // conversions based on elapsed time; wait for Blender's actual result.
+        // Both redirected streams are read concurrently, and this overload also
+        // drains asynchronous OutputDataReceived before checking the completion marker.
+        process.WaitForExit();
         string stdout;
         lock (stdoutText) stdout = stdoutText.ToString();
         var outputText = stdout + "\n" + stderr.GetAwaiter().GetResult();
