@@ -77,7 +77,50 @@ internal static class SyntheticRegression
         var duplicate = Encode(null, (10, 0, "first"), (10, 0, "second"));
         using (var stream = new MemoryStream(Encode("motion/base.motlist", (10, 0, null))))
             Expect<InvalidDataException>(() => ViewportDataLoader.ListMotions(stream, Root, _ => new MemoryStream(duplicate)), "编号重复");
+        CheckBatchFileNames();
         Console.WriteLine("SYNTHETIC_PASS reordered IDs, switches, overrides, nested references, missing/cyclic/corrupt/ambiguous dependencies, stream cleanup");
+    }
+
+    private static void CheckBatchFileNames()
+    {
+        var basis = Encode(null, (20, 0, "inherited_attack"));
+        var data = Encode("motion/base.motlist", (20, 0, null), (10, 0, "斩击:A/B"), (10, 1, "斩击?A\\B"),
+            (30, 0, "  "), (40, 0, new string('a', 79) + "🎮end"));
+        var mesh = new ViewportMesh
+        {
+            Vertices = [Vector3.Zero, Vector3.UnitX, Vector3.UnitY],
+            Normals = [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ],
+            Uvs = [Vector2.Zero, Vector2.UnitX, Vector2.UnitY],
+            Faces = [(0, 1, 2)], FaceTexture = [-1], Textures = [],
+            Weights = [[(0, 1f)], [(0, 1f)], [(0, 1f)]],
+            Bones = [new ViewportBone { Name = "root", ParentIndex = -1, LocalBind = Matrix4x4.Identity, InverseGlobalBind = Matrix4x4.Identity }],
+            DeformToBone = [0]
+        };
+        var directory = Path.Combine(Path.GetTempPath(), "reextractor-naming-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var stream = new MemoryStream(data);
+            var outputs = new AnimationService().ConvertAllToGlbWithAnimation(mesh, stream, Root, directory,
+                fileResolver: path => path.EndsWith("/base.motlist.1036", StringComparison.OrdinalIgnoreCase) ? new MemoryStream(basis) : null);
+            Require(outputs.All(File.Exists), "batch naming paths were written");
+            Require(outputs.Select(Path.GetFileName).SequenceEqual(new[]
+            {
+                "001_inherited_attack_derived_motion000_id20.glb",
+                "002_斩击_A_B_derived_motion001_id10.glb",
+                "003_斩击_A_B_derived_motion002_id10.glb",
+                "004_derived_motion003_id30.glb",
+                "005_" + new string('a', 79) + "_derived_motion004_id40.glb",
+            }), "batch names preserve inherited names, Unicode, unique ID/index, blank fallback and valid truncation");
+            Console.WriteLine("BATCH_FILENAMES_PASS 5 files with readable source names where available");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                foreach (var file in Directory.EnumerateFiles(directory, "*.glb")) File.Delete(file);
+                Directory.Delete(directory);
+            }
+        }
     }
 
     private static byte[] Encode(string? basePath, params (ushort Id, ushort Switch, string? Name)[] slots)

@@ -45,7 +45,7 @@ public sealed class AnimationService
         progress?.Invoke(1, 1);
         return new[] { outputPath };
     }
-public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
+    public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         ViewportMesh skeletonMesh,
         Stream motlistStream, string motlistPath,
         string outputDirectory,
@@ -76,7 +76,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             var motion = motlist.Motions[index];
             if (motion.MotFile is not MotFile && !dmcPlans.Any(p => p.TreeIndex == index) && !riseTrees.ContainsKey(index)) continue;
             var outputPath = Path.Combine(outputDirectory,
-                $"{outputs.Count + 1:D3}_{SafeName(stem)}_motion{index:D3}_id{motion.motNumber}.glb");
+                BatchAnimationFileName(stem, motion.MotFile?.Name, outputs.Count + 1, $"_motion{index:D3}_id{motion.motNumber}"));
             var clip = BuildExportClip(motlist, index, boneNames, skeletonMesh, motlistPath, fileResolver);
             exporter.ConvertToAnimatedGlb(skeletonMesh, visibleGroups, clip, outputPath);
             outputs.Add(outputPath);
@@ -113,7 +113,7 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
             var motion = motlist.Motions[index];
             if (motion.MotFile is not MotFile mot) continue;
             var outputPath = Path.Combine(outputDirectory,
-                $"{outputs.Count + 1:D3}_{SafeName(stem)}_动作{index:D3}_编号{motion.motNumber}.glb");
+                BatchAnimationFileName(stem, mot.Name, outputs.Count + 1, $"_动作{index:D3}_编号{motion.motNumber}"));
             WriteMotionGlb(mesh, mot, motion.motNumber, outputPath, motlistPath);
             outputs.Add(outputPath);
             progress?.Invoke(outputs.Count, exportableCount);
@@ -225,6 +225,23 @@ public IReadOnlyList<string> ConvertAllToGlbWithAnimation(
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         scene.ToGltf2().SaveGLB(outputPath);
         return outputPath;
+    }
+
+    private static string BatchAnimationFileName(string listStem, string? originalName, int ordinal, string sourceSuffix)
+    {
+        // Keep the terminal source index/ID for the guide and for clips whose names collide.
+        var safeList = SafeName(listStem);
+        if (string.IsNullOrWhiteSpace(originalName))
+            return $"{ordinal:D3}_{safeList}{sourceSuffix}.glb";
+
+        const string windowsInvalidChars = "<>:\"/\\|?*";
+        var name = new string(originalName.Trim().Select(c =>
+            char.IsControl(c) || windowsInvalidChars.Contains(c) ? '_' : c).ToArray()).TrimEnd(' ', '.');
+        if (name.Length > 80)
+            name = name[..(char.IsHighSurrogate(name[79]) ? 79 : 80)].TrimEnd(' ', '.');
+        return name.Length == 0
+            ? $"{ordinal:D3}_{safeList}{sourceSuffix}.glb"
+            : $"{ordinal:D3}_{name}_{safeList}{sourceSuffix}.glb";
     }
 
     private static string SafeName(string value)
